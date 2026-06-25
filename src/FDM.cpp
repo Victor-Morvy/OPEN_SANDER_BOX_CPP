@@ -345,6 +345,7 @@ Telemetry FDM::getTelemetry() const
     t.vsFpm    = -t.vDown * 60.0;
     t.loadNz   = getD("accelerations/Nz");
     t.alphaRad = getD("aero/alpha-wing-rad");
+    t.betaDeg  = getD("aero/beta-rad") / DEG2RAD;
     t.flapPos  = getD("fcs/flap-pos-norm");
 
     if (_isE195) {

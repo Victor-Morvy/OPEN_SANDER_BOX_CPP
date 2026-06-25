@@ -647,7 +647,7 @@ int main(){
 
             int hudW = 220;
             ImGui::SetNextWindowPos({(float)(fw - hudW - 8), 8.f}, ImGuiCond_Always);
-            ImGui::SetNextWindowSize({(float)hudW, 310.f}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({(float)hudW, 330.f}, ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(.75f);
             ImGui::Begin("##surf", nullptr,
                 ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
@@ -660,6 +660,20 @@ int main(){
             surfBar("Ailer L",  surfCmd.aileronL);
             surfBar("Ailer R",  surfCmd.aileronR);
             surfBar("Rudder",   surfCmd.rudder);
+            // Slip-skid indicator — barra ±10°, texto em graus reais
+            {
+                float bN = std::clamp((float)tel.betaDeg / 10.f, -1.f, 1.f);
+                float norm = (bN + 1.f) * 0.5f;
+                ImVec4 col = (bN >  0.01f) ? ImVec4{.2f,.7f,1.f,1.f}
+                           : (bN < -0.01f) ? ImVec4{1.f,.4f,.2f,1.f}
+                                           : ImVec4{.5f,.5f,.5f,1.f};
+                char buf[16]; snprintf(buf,16,"%+.1f\xc2\xb0",(float)tel.betaDeg);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+                ImGui::ProgressBar(norm, {110.f,12.f}, buf);
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0,6);
+                ImGui::Text("Beta");
+            }
             ImGui::Separator();
             surf01 ("Flap",     surfCmd.flaps / 0.75f);
             surf01 ("SpdBrk",   surfCmd.groundSpoiler);

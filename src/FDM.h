@@ -29,6 +29,7 @@ struct Telemetry {
     double gearPos  = 1;   // 0..1
     double loadNz   = 1;   // fator de carga [g]
     double alphaRad = 0;   // ângulo de ataque [rad]
+    double betaDeg  = 0;   // ângulo de derrapagem lateral [°] — + = deslize para direita
 };
 
 // ── Condições de controle (C172P — interface legada) ─────────────────────────

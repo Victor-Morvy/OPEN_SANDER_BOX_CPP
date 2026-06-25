@@ -1,0 +1,9 @@
+# Build artifacts
+build/
+
+# Temp / scratch files
+temp/
+
+# Editor
+.vs/
+*.user

@@ -12,6 +12,7 @@ void FlyByWire::reset()
     _targetBank   = 0.f;
     _prevRollErr  = 0.f;
     _bankProt     = false;
+    _prevYawRate  = 0.f;
     _initialized  = false;
 }
 
@@ -107,16 +108,24 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // GUINADA — Pedais diretos (yaw damper desativado: setas só controlam aileron)
+    // GUINADA — Auto-rudder (beta → 0) + pedais + yaw damper
+    // Convenção: out.rudder > 0 = guinada para direita (FDM negará ao escrever)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
         if (st.wow) {
-            // Em terra: pedais dirigem o nariz, rudder com autoridade total
             out.rudder       = clamp1(inp.pedals);
             out.steerNoseDeg = inp.pedals * MAX_STEER_DEG;
         } else {
-            // Em voo: rudder com 50% de autoridade de pedal (FBW limita)
-            out.rudder       = clamp1(inp.pedals * 0.5f);
+            // Auto-rudder: anula beta proporcional (coordenação de curva)
+            // beta > 0 (deslize para direita) → guinada para direita (+rudder)
+            float autoRudder = gains.betaKp * st.betaDeg;
+
+            // Yaw damper washout (filtro passa-alta ~1 Hz): amortece Dutch roll
+            float ydDeriv    = st.yawRateDegS - _prevYawRate;
+            _prevYawRate     = st.yawRateDegS;
+            float ydCorrect  = -gains.yawDamperK * ydDeriv;
+
+            out.rudder       = clamp1(inp.pedals * 0.5f + autoRudder + ydCorrect);
             out.steerNoseDeg = 0.f;
         }
     }

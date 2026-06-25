@@ -68,178 +68,63 @@ void main(){
 }
 )glsl";
 
-// Pista renderizada via textura CPU gerada com marcações ICAO
+// Marcações ICAO procedurais em metros reais — vUV mapeado para metros,
+// sem depender de razão de aspecto de textura.
 static const char* RW_FRAG = R"glsl(
 #version 330 core
 in vec2 vUV;
 out vec4 FragColor;
-uniform sampler2D uTex;
 uniform float uDay;
+uniform float uLengthM;
+uniform float uWidthM;
+uniform vec3  uSurfaceColor;
+
 void main(){
-    vec3 col = texture(uTex, vUV).rgb;
-    col = pow(col, vec3(2.2));          // sRGB → linear (igual ao terrain shader)
+    float alongM  = vUV.y * uLengthM;
+    float acrossM = vUV.x * uWidthM;
+    float halfW   = uWidthM * 0.5;
+    float absFC   = abs(acrossM - halfW);
+
+    bool mark = false;
+
+    // Threshold bars: 6 barras 1.8 m × gap 1.8 m, zona de 30 m em cada cabeceira
+    bool inThresh = (alongM < 30.0) || (alongM > uLengthM - 30.0);
+    if (inThresh && absFC < 9.9) {
+        if (mod(absFC, 3.6) < 1.8) mark = true;
+    }
+
+    // Centerline: 0.3 m largura, 30 m dash / 15 m gap, de 60 m ao centro
+    if (!mark && absFC < 0.15 && alongM > 60.0 && alongM < uLengthM - 60.0)
+        if (mod(alongM - 60.0, 45.0) < 30.0) mark = true;
+
+    // TDZ: 3 m × largura da pista em 150 m e 300 m de cada cabeceira (L > 900 m)
+    if (!mark && uLengthM > 900.0 && absFC > 3.0 && absFC < halfW - 2.0) {
+        float q = uLengthM - alongM;
+        if ((alongM > 149.0 && alongM < 152.0) || (alongM > 299.0 && alongM < 302.0) ||
+            (q      > 149.0 && q      < 152.0) || (q      > 299.0 && q      < 302.0))
+            mark = true;
+    }
+
+    vec3 col = mark ? vec3(0.85) : uSurfaceColor;
+    col = pow(col, vec3(2.2));
     col *= mix(0.20, 1.0, uDay);
     FragColor = vec4(col, 1.0);
 }
 )glsl";
 
-// ── Bitmap font 5×7 para designadores de pista ───────────────────────────────
-// Bit 4 = coluna mais à esquerda, bit 0 = mais à direita
-
-static const struct { char c; uint8_t rows[7]; } GLYPH_DATA[] = {
-    {'0', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
-    {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
-    {'2', {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}},
-    {'3', {0x0E,0x11,0x01,0x06,0x01,0x11,0x0E}},
-    {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}},
-    {'5', {0x1F,0x10,0x10,0x1E,0x01,0x11,0x0E}},
-    {'6', {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}},
-    {'7', {0x1F,0x01,0x02,0x04,0x04,0x04,0x04}},
-    {'8', {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}},
-    {'9', {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}},
-    {'L', {0x10,0x10,0x10,0x10,0x10,0x11,0x1F}},
-    {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
-    {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
-};
-
-static const uint8_t* getGlyph(char c) {
-    for (auto& g : GLYPH_DATA)
-        if (g.c == c) return g.rows;
-    return GLYPH_DATA[0].rows;
-}
-
-// Desenha um glifo 5×7 escalado em `scale` pixels por pixel
-// flip=true: gira 180° (para número LE que o piloto vê chegando pelo threshold)
-static void drawGlyph(std::vector<uint8_t>& tex, int W, int H,
-                      int x0, int y0, char c, int scale, bool flip,
-                      uint8_t r, uint8_t g, uint8_t b)
-{
-    const uint8_t* rows = getGlyph(c);
-    for (int row = 0; row < 7; row++) {
-        int srcRow = flip ? (6 - row) : row;
-        for (int col = 0; col < 5; col++) {
-            int srcCol = flip ? (4 - col) : col;
-            if (!((rows[srcRow] >> (4 - srcCol)) & 1)) continue;
-            for (int dy = 0; dy < scale; dy++) for (int dx = 0; dx < scale; dx++) {
-                int px = x0 + col*scale + dx;
-                int py = y0 + row*scale + dy;
-                if (px < 0 || px >= W || py < 0 || py >= H) continue;
-                int idx = (py*W + px)*3;
-                tex[idx]=r; tex[idx+1]=g; tex[idx+2]=b;
-            }
-        }
-    }
-}
-
-// Desenha string centralizada em (cx,cy)
-static void drawString(std::vector<uint8_t>& tex, int W, int H,
-                       int cx, int cy, const std::string& str, int scale, bool flip,
-                       uint8_t r, uint8_t g, uint8_t b)
-{
-    if (str.empty()) return;
-    int charW  = (5 + 1) * scale;          // 5 pixels + 1 gap
-    int totalW = (int)str.size() * charW - scale;
-    int x0     = cx - totalW / 2;
-    int y0     = cy - (7 * scale) / 2;
-    for (char c : str) { drawGlyph(tex, W, H, x0, y0, c, scale, flip, r, g, b); x0 += charW; }
-}
-
-// Gera textura de pista ICAO: threshold bars, números, TDZ, centerline
-// Layout: v=0 (textura row 0) = threshold LE; v=1 (row CH-1) = threshold HE
-static GLuint genRunwayTex(const std::string& leIdent, const std::string& heIdent,
-                            const std::string& surface)
-{
-    constexpr int CW = 256, CH = 512;
-    std::vector<uint8_t> tex(CW * CH * 3);
-
-    // Cor de fundo baseada na superfície
-    std::string surf = surface;
-    std::transform(surf.begin(), surf.end(), surf.begin(), ::tolower);
-    uint8_t br, bg, bb;
-    // OurAirports usa abreviações: CON=concrete, ASP=asphalt, GRS/TURF=grama
-    bool isConcrete = (surf == "con" || surf == "conc" || surf.find("concrete") != surf.npos);
-    bool isGrass    = (surf == "grs" || surf == "turf" || surf == "gre" ||
-                       surf.find("grass") != surf.npos || surf.find("turf") != surf.npos);
-    bool isGravel   = (surf == "gvl" || surf.find("gravel") != surf.npos ||
-                       surf.find("dirt") != surf.npos || surf.find("sand") != surf.npos);
-    if      (isConcrete) { br=152; bg=152; bb=152; }
-    else if (isGrass)    { br=26;  bg=74;  bb=26;  }
-    else if (isGravel)   { br=92;  bg=61;  bb=40;  }
-    else                 { br=40;  bg=40;  bb=41;  } // asfalto (ASP, default)
-
-    for (int i = 0; i < CW*CH*3; i += 3) { tex[i]=br; tex[i+1]=bg; tex[i+2]=bb; }
-
-    bool isHard = !isGrass && !isGravel &&
-                  surf.find("water") == surf.npos;
-
-    auto fillRect = [&](int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b) {
-        for (int py = y; py < y+h; py++) { if (py<0||py>=CH) continue;
-        for (int px = x; px < x+w; px++) { if (px<0||px>=CW) continue;
-            int idx=(py*CW+px)*3; tex[idx]=r; tex[idx+1]=g; tex[idx+2]=b; } }
-    };
-
-    if (!isHard) {
-        // Superficie suave: só centerline tracejada
-        int dLen=(int)(CH*0.04f), gLen=(int)(CH*0.03f), lw=3, cx2=(CW-lw)/2;
-        for (int y=0; y<CH; y+=dLen+gLen) fillRect(cx2,y,lw,std::min(dLen,CH-y),200,200,200);
-    } else {
-        const int TH     = (int)(CH * 0.04f); // altura das threshold bars = 20px
-        const int barW   = (int)(CW * 0.10f); // largura de cada barra = 25px
-        const int barGap = (int)(CW * 0.03f); // espaço entre barras = 7px
-        const int totBW  = 6*barW + 5*barGap; // total = 185px
-        const int barX0  = (CW - totBW) / 2;  // início centralizado = 35px
-
-        // 6 threshold bars num dado y
-        auto drawThreshBars = [&](int yTop) {
-            for (int i=0; i<6; i++)
-                fillRect(barX0 + i*(barW+barGap), yTop, barW, TH, 220,220,220);
-        };
-
-        // 2 fileiras de barras TDZ (par esquerda+direita)
-        const int tdzW = (int)(CW * 0.18f); // 46px
-        const int tdzH = (int)(CH * 0.012f); // 6px
-        const int tdzSp= (int)(CH * 0.05f);  // 25px entre fileiras
-        auto drawTDZBars = [&](int yTop) {
-            for (int row=0; row<2; row++) {
-                int y = yTop + row*tdzSp;
-                fillRect((int)(CW*0.05f),              y, tdzW, tdzH, 200,200,200);
-                fillRect((int)(CW-CW*0.05f-tdzW),      y, tdzW, tdzH, 200,200,200);
-            }
-        };
-
-        // Números de pista: scale=10 → glifo 50×70px
-        const int SCALE    = 10;
-        const int numOfsY  = (int)(CW * 0.28f * 0.6f); // ≈43px do centro ao threshold bar
-
-        // ── LE (v=0, row 0 = bottom of texture ↔ threshold) ──
-        drawThreshBars(0);
-        drawString(tex, CW, CH, CW/2, TH+numOfsY, leIdent, SCALE, true,  220,220,220);
-        drawTDZBars((int)(CH*0.18f));
-
-        // ── HE (v=1, row CH-1) ──
-        drawThreshBars(CH - TH);
-        drawString(tex, CW, CH, CW/2, CH-TH-numOfsY, heIdent, SCALE, false, 220,220,220);
-        drawTDZBars((int)(CH*0.77f));
-
-        // ── Centerline tracejada entre as zonas de marcação ──
-        int dLen=(int)(CH*0.025f), gLen=(int)(CH*0.018f), lw=(int)(CW*0.012f);
-        int cx2=(CW-lw)/2, yS=(int)(CH*0.27f), yE=(int)(CH*0.73f);
-        for (int y=yS; y<yE; y+=dLen+gLen)
-            fillRect(cx2, y, lw, std::min(dLen,yE-y), 200,200,200);
-    }
-
-    GLuint texId;
-    glGenTextures(1, &texId);
-    glBindTexture(GL_TEXTURE_2D, texId);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, CW, CH, 0, GL_RGB, GL_UNSIGNED_BYTE, tex.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return texId;
+// Cor de superfície da pista (linear — shader aplica pow(x,2.2) depois)
+static glm::vec3 surfaceColor(const std::string& surface) {
+    std::string s = surface;
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    bool isConcrete = (s == "con" || s == "conc" || s.find("concrete") != s.npos);
+    bool isGrass    = (s == "grs" || s == "turf" || s == "gre" ||
+                       s.find("grass") != s.npos || s.find("turf") != s.npos);
+    bool isGravel   = (s == "gvl" || s.find("gravel") != s.npos ||
+                       s.find("dirt") != s.npos || s.find("sand") != s.npos);
+    if (isConcrete) return {0.596f, 0.596f, 0.596f};
+    if (isGrass)    return {0.102f, 0.290f, 0.102f};
+    if (isGravel)   return {0.361f, 0.239f, 0.157f};
+    return {0.157f, 0.157f, 0.161f}; // asfalto
 }
 
 // Luzes de pista: GL_POINTS coloridos com halo suave
@@ -405,8 +290,7 @@ void AirportManager::buildGpuRwy(GpuRwy& g) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // Textura com marcações ICAO (números, threshold bars, centerline)
-    g.tex = genRunwayTex(g.leIdent, g.heIdent, g.surface);
+    g.surfColor = surfaceColor(g.surface);
 }
 
 // ── clearActive ───────────────────────────────────────────────────────────────
@@ -415,7 +299,6 @@ void AirportManager::clearActive() {
     for (auto& g : _activeRwys) {
         if (g.vao) glDeleteVertexArrays(1,&g.vao);
         if (g.vbo) glDeleteBuffers(1,&g.vbo);
-        if (g.tex) glDeleteTextures(1,&g.tex);
     }
     _activeRwys.clear();
 }
@@ -596,18 +479,17 @@ void AirportManager::render(const glm::mat4& VP,
     glUniformMatrix4fv(glGetUniformLocation(_rwProg,"uVP"),    1,GL_FALSE,glm::value_ptr(VP));
     glUniform3fv      (glGetUniformLocation(_rwProg,"uAcFull"),1,glm::value_ptr(acFull));
     glUniform1f       (glGetUniformLocation(_rwProg,"uDay"),   day);
-    glUniform1i       (glGetUniformLocation(_rwProg,"uTex"),   0);
     glDisable(GL_CULL_FACE);
-    glActiveTexture(GL_TEXTURE0);
     for (const auto& g : _activeRwys) {
         if (!g.vao) continue;
-        glBindTexture(GL_TEXTURE_2D, g.tex);
+        glUniform1f(glGetUniformLocation(_rwProg,"uLengthM"),     g.lengthM);
+        glUniform1f(glGetUniformLocation(_rwProg,"uWidthM"),      g.widthM);
+        glUniform3fv(glGetUniformLocation(_rwProg,"uSurfaceColor"),1,glm::value_ptr(g.surfColor));
         glBindVertexArray(g.vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
 
     glDisable(GL_POLYGON_OFFSET_FILL);
 

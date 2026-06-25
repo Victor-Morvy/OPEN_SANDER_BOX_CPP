@@ -37,11 +37,12 @@ private:
     };
 
     struct GpuRwy {
-        GLuint vao=0, vbo=0, tex=0;
+        GLuint vao=0, vbo=0;
         float wx1, wz1, wx2, wz2;
         float elevLE, elevHE;
         float widthM, lengthM;
         bool  lighted;
+        glm::vec3 surfColor{0.16f, 0.16f, 0.16f};
         std::string leIdent, heIdent, surface;
     };
 

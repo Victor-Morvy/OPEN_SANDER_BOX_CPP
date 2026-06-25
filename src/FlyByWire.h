@@ -36,6 +36,7 @@ public:
         float yawRateDegS   = 0.f;    // r [°/s]
         float loadFactorNz  = 1.f;    // Nz [g]
         float alphaRad      = 0.f;    // ângulo de ataque (asa) [rad]
+        float betaDeg       = 0.f;    // ângulo de derrapagem lateral [°] — + = deslize para direita
         float casKt         = 0.f;    // velocidade calibrada [kt]
         float mach          = 0.f;
         bool  wow           = false;   // weight on wheels (main gear)
@@ -74,8 +75,9 @@ public:
         float holdKp         = 0.04f; // ganho reduzido para attitude hold
         float maxRollRateDegS= 22.f;  // taxa de rolagem máxima comandada
 
-        // Yaw damper
+        // Yaw damper + auto-rudder (coordenação de curva)
         float yawDamperK = 0.40f;  // ganho de amortecimento
+        float betaKp     = 0.10f;  // ganho proporcional de correção de beta
     } gains;
 
     // ── Interface principal ───────────────────────────────────────────────────
@@ -118,6 +120,9 @@ private:
     float _targetBank   = 0.f;
     float _prevRollErr  = 0.f;
     bool  _bankProt     = false;
+
+    // Yaw damper
+    float _prevYawRate  = 0.f;
 
     // Gear
     bool _gearDown      = false;

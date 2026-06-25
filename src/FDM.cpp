@@ -237,9 +237,9 @@ void FDM::setControlsE195(const FlyByWire::SurfaceCmd& cmd)
     setD("fcs/left-aileron-master",  clamp1(cmd.aileronL));
     setD("fcs/right-aileron-master", clamp1(cmd.aileronR));
 
-    // Leme
-    setD("fcs/rudder-master",        clamp1(cmd.rudder));
-    setD("controls/flight/rudder",   clamp1(cmd.rudder));
+    // Leme — negado: convenção JSBSim E195 é oposta ao sinal aerodinâmico padrão
+    setD("fcs/rudder-master",        clamp1(-cmd.rudder));
+    setD("controls/flight/rudder",   clamp1(-cmd.rudder));
 
     // Throttle — mesmo padrão do deleteme: SetPropertyValue com barra inicial
     double thr0 = clamp01(cmd.throttle[0]);
@@ -304,6 +304,7 @@ FlyByWire::AircraftState FDM::getStateForFBW() const
     st.yawRateDegS   = (float)(getD("velocities/r-aero-rad_sec")   / DEG2RAD);
     st.loadFactorNz  = (float)getD("accelerations/Nz");
     st.alphaRad      = (float)getD("aero/alpha-wing-rad");
+    st.betaDeg       = (float)(getD("aero/beta-rad") / DEG2RAD);
     st.casKt         = (float)getD("velocities/vc-kts");
     st.mach          = (float)getD("velocities/mach");
     st.wow           = (getD("gear/unit[1]/WOW") > 0.5) ||

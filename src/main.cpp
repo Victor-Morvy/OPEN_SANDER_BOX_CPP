@@ -18,6 +18,7 @@
 #include "TileManager.h"
 #include "Clouds.h"
 #include "AirportManager.h"
+#include "OSMManager.h"
 #include "PostFX.h"
 
 #include <cstdio>
@@ -289,6 +290,13 @@ int main(){
     airports.load(DATA_PATH "/airports.csv", DATA_PATH "/runways.csv",
                   ORIGIN_LAT, ORIGIN_LON);
 
+    OSMManager osm;
+    {
+        const char* appdata = std::getenv("LOCALAPPDATA");
+        std::string osmCache = (appdata ? std::string(appdata) : ".") + "/webflight/osm_cache";
+        osm.init(ORIGIN_LAT, ORIGIN_LON, osmCache);
+    }
+
     PostFX postfx; postfx.init();
 
     // Programa shader único (wireframe + pontos)
@@ -423,6 +431,7 @@ int main(){
 
         // Aeroportos (precisa acMslM para PAPI)
         airports.update(acWorld, acMslM, closeTiles, farTiles);
+        osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles);
 
         if(fdmOk && !paused){
             // 1. Monta input do piloto
@@ -499,6 +508,9 @@ int main(){
 
         // 3. Aeroportos (pistas opacas renderizadas antes das nuvens)
         airports.render(proj*view, acWorld, acMslM, day);
+
+        // 3b. OSM: prédios, estradas, água
+        osm.render(proj*view, acWorld, day, (float)glfwGetTime());
 
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);
@@ -786,7 +798,7 @@ int main(){
     }
 
     sky.cleanup(); farTiles.cleanup(); closeTiles.cleanup();
-    clouds.cleanup(); airports.cleanup(); postfx.cleanup();
+    clouds.cleanup(); airports.cleanup(); osm.cleanup(); postfx.cleanup();
     glDeleteVertexArrays(1,&acVAO); glDeleteBuffers(1,&acVBO); glDeleteBuffers(1,&acEBO);
     glDeleteVertexArrays(1,&ptVAO); glDeleteBuffers(1,&ptVBO);
     glDeleteProgram(prog);

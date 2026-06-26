@@ -3,13 +3,14 @@ project(WebFlightCpp CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── vcpkg (glad, glfw3, glm, imgui, curl, stb) ──────────────────────────────
-find_package(glad  CONFIG REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glm   CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-find_package(CURL  CONFIG REQUIRED)
-find_package(Stb   REQUIRED)
+# ── vcpkg (glad, glfw3, glm, imgui, curl, stb, nlohmann_json) ───────────────
+find_package(glad          CONFIG REQUIRED)
+find_package(glfw3         CONFIG REQUIRED)
+find_package(glm           CONFIG REQUIRED)
+find_package(imgui         CONFIG REQUIRED)
+find_package(CURL          CONFIG REQUIRED)
+find_package(Stb           REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # ── JSBSim — baixa e compila do GitHub ──────────────────────────────────────
 include(FetchContent)
@@ -43,6 +44,7 @@ add_executable(webflight
   src/TileManager.cpp
   src/Clouds.cpp
   src/AirportManager.cpp
+  src/OSMManager.cpp
   src/PostFX.cpp
 )
 
@@ -62,10 +64,11 @@ target_link_libraries(webflight PRIVATE
   glm::glm
   imgui::imgui
   CURL::libcurl
+  nlohmann_json::nlohmann_json
   opengl32
 )
 
 if(MSVC)
-  target_compile_options(webflight PRIVATE /W3 /utf-8 /wd4244 /wd4267)
-  # Desativa aviso de narrowing e size_t conversion que JSBSim gera
+  target_compile_options(webflight PRIVATE /W3 /utf-8 /wd4244 /wd4267 /wd4996)
+  target_compile_definitions(webflight PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()

@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<!-- Initialises all params/* aerodynamic scale factors to 1.0.
+     dc3.xml references these as multipliers inside every aerodynamic
+     function; without initialisation they default to 0 in JSBSim WASM,
+     producing zero lift/drag/moments.  The original Engines.xml (which
+     we strip because it contains SWITCH elements that crash WASM) was
+     the file expected to own these values in FlightGear.  Here we set
+     them all to the neutral pass-through value of 1.0. -->
+<system name="DC3-Params">
+  <channel name="Aero Params">
+
+    <!-- LIFT -->
+    <fcs_function name="params/lift/propwash">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/lift/alpha">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/lift/pitch-rate">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/lift/alpha-rate">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/lift/elevator">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/lift/flaps">
+      <function><value>1.0</value></function>
+    </fcs_function>
+
+    <!-- DRAG -->
+    <fcs_function name="params/drag/parasitic">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/alpha">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/induced">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/mach">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/beta">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/elevator">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/gear">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/cowl-flaps">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/drag/flaps">
+      <function><value>1.0</value></function>
+    </fcs_function>
+
+    <!-- PITCH -->
+    <fcs_function name="params/pitch/propwash">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/pitch/alpha">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/pitch/elevator">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/pitch/rate">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/pitch/alphadot">
+      <function><value>1.0</value></function>
+    </fcs_function>
+
+    <!-- ROLL -->
+    <fcs_function name="params/roll/beta">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/roll/damp">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/roll/yaw">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/roll/aileron">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/roll/rudder">
+      <function><value>1.0</value></function>
+    </fcs_function>
+
+    <!-- YAW -->
+    <fcs_function name="params/yaw/beta">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/yaw/roll">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/yaw/damp">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/yaw/rudder">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/yaw/aileron">
+      <function><value>1.0</value></function>
+    </fcs_function>
+    <fcs_function name="params/yaw/cowl-flaps">
+      <function><value>1.0</value></function>
+    </fcs_function>
+
+  </channel>
+</system>

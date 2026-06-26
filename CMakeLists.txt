@@ -27,12 +27,12 @@ FetchContent_Declare(jsbsim
 )
 FetchContent_MakeAvailable(jsbsim)
 
-# ── Caminhos dos XMLs (reutiliza os do projeto JS — sem duplicar arquivos) ───
-set(AC_ROOT "${CMAKE_SOURCE_DIR}/../newGame/public")
-file(TO_CMAKE_PATH "${AC_ROOT}/aircraft"  _AC_PATH)
-file(TO_CMAKE_PATH "${AC_ROOT}/engine"    _EN_PATH)
-file(TO_CMAKE_PATH "${AC_ROOT}"           _SY_PATH)
-file(TO_CMAKE_PATH "${AC_ROOT}/data"      _DATA_PATH)
+# ── Caminhos dos dados (self-contained em data/) ─────────────────────────────
+set(DATA_ROOT "${CMAKE_SOURCE_DIR}/data")
+file(TO_CMAKE_PATH "${DATA_ROOT}/aircraft"  _AC_PATH)
+file(TO_CMAKE_PATH "${DATA_ROOT}/engine"    _EN_PATH)
+file(TO_CMAKE_PATH "${DATA_ROOT}"           _SY_PATH)   # JSBSim procura data/systems/
+file(TO_CMAKE_PATH "${DATA_ROOT}/nav"       _DATA_PATH) # airports.csv, runways.csv
 
 # ── Executável ───────────────────────────────────────────────────────────────
 add_executable(webflight

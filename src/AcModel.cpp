@@ -57,19 +57,29 @@ bool AcModel::loadMesh(const std::string& objPath, std::vector<AcMesh>& out) {
     std::vector<glm::vec2> uv;
 
     int curMat = 0;
-    struct Group { std::vector<ObjVert> verts; std::vector<uint32_t> idx; int mat; };
+    std::string curMatName;
+    struct Group {
+        std::vector<ObjVert> verts;
+        std::vector<uint32_t> idx;
+        int mat;
+        std::string texFile;  // from map_Kd in MTL (empty = use TEX_MAP)
+    };
     std::vector<Group> groups;
-    std::unordered_map<std::string, int> matIndex;
+    std::unordered_map<std::string, int>         matIndex;
+    std::unordered_map<std::string, std::string> matTex;   // mat name → texture file
 
-    // MTL parser (re-parses erj195.mtl but we only care about mat names → index)
+    // MTL parser: reads newmtl names (→ index) and map_Kd (→ texture file)
     auto parseMtl = [&](const std::string& mtlPath) {
         std::ifstream mf(mtlPath);
         if (!mf) return;
-        std::string line; int idx = -1;
+        std::string line, curNm; int idx = -1;
         while (std::getline(mf, line)) {
             std::istringstream ss(line); std::string key; ss >> key;
             if (key == "newmtl") {
-                std::string nm; ss >> nm; ++idx; matIndex[nm] = idx;
+                ss >> curNm; ++idx; matIndex[curNm] = idx;
+            } else if (key == "map_Kd" && !curNm.empty()) {
+                std::string tex; ss >> tex;
+                matTex[curNm] = tex;
             }
         }
     };
@@ -89,16 +99,26 @@ bool AcModel::loadMesh(const std::string& objPath, std::vector<AcMesh>& out) {
         } else if (key == "vn") {
             float x,y,z; ss>>x>>y>>z; nrm.push_back({x,y,z});
         } else if (key == "usemtl") {
-            std::string mn; ss>>mn;
-            auto it = matIndex.find(mn);
+            ss >> curMatName;
+            auto it = matIndex.find(curMatName);
             curMat = (it != matIndex.end()) ? it->second : 0;
+            // Find or create group for this (mat, texFile) combination
+            std::string texFile;
+            auto ti = matTex.find(curMatName);
+            if (ti != matTex.end()) texFile = ti->second;
             bool found = false;
-            for (auto& g : groups) if (g.mat==curMat){found=true;break;}
-            if (!found) groups.push_back({{},{},curMat});
+            for (auto& g : groups)
+                if (g.mat==curMat && g.texFile==texFile){found=true;break;}
+            if (!found) groups.push_back({{},{},curMat,texFile});
         } else if (key == "f") {
+            // Find group for current (mat, texFile)
+            std::string texFile;
+            auto ti = matTex.find(curMatName);
+            if (ti != matTex.end()) texFile = ti->second;
             Group* grp = nullptr;
-            for (auto& g : groups) if (g.mat==curMat){grp=&g;break;}
-            if (!grp){ groups.push_back({{},{},curMat}); grp=&groups.back(); }
+            for (auto& g : groups)
+                if (g.mat==curMat && g.texFile==texFile){grp=&g;break;}
+            if (!grp){ groups.push_back({{},{},curMat,texFile}); grp=&groups.back(); }
 
             std::vector<ObjVert> fv;
             std::string tok;
@@ -127,8 +147,13 @@ bool AcModel::loadMesh(const std::string& objPath, std::vector<AcMesh>& out) {
         AcMesh m;
         m.matIdx = g.mat;
         m.count  = (int)g.idx.size();
-        int mi   = g.mat;
-        m.texId  = loadTex((mi>=0 && mi<4) ? TEX_MAP[mi] : "Embraer195.png");
+        // Textura: usa map_Kd do MTL se disponível, senão recorre ao TEX_MAP fixo
+        if (!g.texFile.empty()) {
+            m.texId = loadTex(g.texFile);
+        } else {
+            int mi = g.mat;
+            m.texId = loadTex((mi>=0 && mi<4) ? TEX_MAP[mi] : "Embraer195.png");
+        }
 
         glGenVertexArrays(1,&m.vao); glGenBuffers(1,&m.vbo); glGenBuffers(1,&m.ibo);
         glBindVertexArray(m.vao);
@@ -185,6 +210,11 @@ bool AcModel::load(const std::string& objPath) {
         auto& ax = jp["axis"];
         part.axis  = {ax[0].get<float>(), ax[1].get<float>(), ax[2].get<float>()};
 
+        if (jp.contains("max_deg") && !jp["max_deg"].is_null())
+            part.maxRad = jp["max_deg"].get<float>() * 3.14159265f / 180.f;
+        if (jp.contains("sign"))
+            part.sign = jp["sign"].get<float>();
+
         if (!loadMesh(pobj, part.meshes)) {
             std::cerr << "[AcModel] skipping part " << part.name << "\n";
             continue;
@@ -199,26 +229,48 @@ bool AcModel::load(const std::string& objPath) {
 
 // ── Animation angle mapping ───────────────────────────────────────────────────
 
-float AcModel::partAngle(const std::string& name, const AcAnimState& s) const {
-    constexpr float A_AIL  = 0.436f;  // 25°
-    constexpr float A_ELEV = 0.524f;  // 30°
-    constexpr float A_RDR  = 0.611f;  // 35°
-    constexpr float A_FLAP = 0.611f;  // 35°
-    constexpr float A_SPL  = 1.047f;  // 60°
-    constexpr float A_GEAR = 1.571f;  // 90°
+float AcModel::partAngle(const AcPart& p, const AcAnimState& s) const {
+    const std::string& name = p.name;
+    const float mr  = p.maxRad;   // max rotation from JSON
+    const float sgn = p.sign;
 
-    if (name == "aileron.l")                    return  s.aileronL * A_AIL;
-    if (name == "aileron.r")                    return -s.aileronR * A_AIL;
-    if (name == "elevator.l" || name == "elevator.r") return s.elevL * A_ELEV;
-    if (name == "rudder")                       return  s.rudder  * A_RDR;
-    if (name.size()>=4 && name.substr(0,4)=="flap")         return s.flaps   * A_FLAP;
-    if (name.size()>=10&& name.substr(0,10)=="spoiler.l")   return s.spoilerL* A_SPL;
-    if (name.size()>=10&& name.substr(0,10)=="spoiler.r")   return s.spoilerR* A_SPL;
+    // Control surfaces — [-1..1] × maxRad × sign
+    if (name == "aileron.l")  return  s.aileronL * mr * sgn;
+    if (name == "aileron.r")  return  s.aileronR * mr * sgn;
+    if (name == "elevator.l" || name == "elevator.r") return s.elevL * mr * sgn;
+    if (name == "rudder")     return  s.rudder   * mr * sgn;
+
+    // Flaps [0..1] × maxRad × sign  (XML max 25° at full extension)
+    if (name.size()>=4 && name.substr(0,4)=="flap")
+        return s.flaps * mr * sgn;
+
+    // Spoilers [0..1]
+    if (name.size()>=10 && name.substr(0,10)=="spoiler.l") return s.spoilerL * mr * sgn;
+    if (name.size()>=10 && name.substr(0,10)=="spoiler.r") return s.spoilerR * mr * sgn;
+
+    // Landing gear legs/tires — retract angle = (1−gearPos) × maxRad
     if (name=="gear.l"||name=="gear.r"||name=="gear.n"||
-        (name.size()>=4 && name.substr(0,4)=="tire")||
-        (name.size()>=8 && name.substr(0,8)=="geardoor"))
-        return (1.f - s.gearPos) * A_GEAR;
-    if (name=="fan.l"||name=="fan.r")           return s.fanAngle;
+        (name.size()>=4 && name.substr(0,4)=="tire"))
+        return (1.f - s.gearPos) * mr * sgn;
+
+    // Nose gear front doors: open during transit (sinusoidal), closed when stationary
+    if (name=="geardoor.f.l"||name=="geardoor.f.r") {
+        // FG: opens to ±90° at mid-transit (gearPos 0.2→0.8), closed at 0 and 1
+        float t = s.gearPos;
+        float open = std::sin(t * 3.14159265f);  // 0 at 0 and 1, 1 at 0.5
+        return open * mr * sgn;
+    }
+
+    // Nose gear back doors: stay open when gear is down
+    if (name=="geardoor.b.l"||name=="geardoor.b.r") {
+        // FG: closed at pos=0 (retracted), open at pos>0.2 (stays open when down)
+        float t = std::min(1.f, s.gearPos / 0.2f);
+        return t * mr * sgn;
+    }
+
+    // Engine fans (continuous spin)
+    if (name=="fan.l"||name=="fan.r") return s.fanAngle;
+
     return 0.f;
 }
 
@@ -253,7 +305,7 @@ void AcModel::draw(GLuint staticProg, GLuint animProg,
     glUniformMatrix4fv(glGetUniformLocation(animProg,"uMVP"), 1, GL_FALSE, glm::value_ptr(MVP));
     glUniform1f(glGetUniformLocation(animProg,"uAlpha"), 1.f);
     for (const auto& part : _parts) {
-        float angle = partAngle(part.name, anim);
+        float angle = partAngle(part, anim);
         glUniform3fv(glGetUniformLocation(animProg,"uPivot"), 1, glm::value_ptr(part.pivot));
         glUniform3fv(glGetUniformLocation(animProg,"uAxis"),  1, glm::value_ptr(part.axis));
         glUniform1f (glGetUniformLocation(animProg,"uAngle"), angle);

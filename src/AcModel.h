@@ -31,6 +31,8 @@ struct AcPart {
     std::vector<AcMesh> meshes;
     glm::vec3          pivot{0,0,0};
     glm::vec3          axis{1,0,0};
+    float              maxRad = 0.611f;  // max rotation (radians), from JSON max_deg
+    float              sign   = 1.f;     // direction sign, from JSON
 };
 
 class AcModel {
@@ -53,6 +55,6 @@ private:
 
     bool   loadMesh(const std::string& path, std::vector<AcMesh>& out);
     GLuint loadTex(const std::string& file);
-    float  partAngle(const std::string& name, const AcAnimState& s) const;
+    float  partAngle(const AcPart& part, const AcAnimState& s) const;
     void   drawMeshes(GLuint prog, const std::vector<AcMesh>& meshes) const;
 };

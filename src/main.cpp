@@ -199,10 +199,19 @@ static GLuint makeProgram(const char* vs,const char* fs){
 
 struct Axes {
     float ail=0, elv=0, rdr=0, thr=0.50f, brk=0, flaps=0;
-    float trimElev=0, trimAil=0;   // trim persistente (numpad 8/5=pitch, 4/6=roll)
+    float trimElev=0, trimAil=0;
     bool gear=false;
-    bool pauseBtn=false;   // Start — nível, edge detectado no main loop
-    bool reverser=false;   // Y/△ — pré-mapeado, ainda não funcional
+    bool pauseBtn=false;
+    bool reverser=false;
+    // ── Câmera orbital (ângulos persistentes; L2+R2 para ajustar)
+    float camYaw   = 0.f;    // 0=atrás, π=nariz; persiste ao soltar gatilhos
+    float camPitch = 0.26f;  // ~15° acima; clampado em ±80°
+    bool  trigsHeld = false; // L2+R2 seguros agora (suprime stick nas outras funções)
+    // ── Cockpit: olhar com a cabeça (stick dir. sem gatilhos)
+    float headYaw   = 0.f;  // yaw local relativo ao nariz
+    float headPitch = 0.f;  // pitch local
+    // ── Toggle câmera (Círculo/B)
+    bool cockpit = false;
 };
 
 static bool gGearPrev = false;
@@ -247,16 +256,33 @@ static bool readJoystick(Axes& a, float dt){
     int ac; const float* ax = glfwGetJoystickAxes(jid, &ac);
     if(!ax) return false;
 
+    // ── Gatilhos L2/R2 (eixos 4 e 5: -1=solto → +1=fundo) ──────────────────────
+    float l2val = (ac > 4) ? ax[4] : -1.f;
+    float r2val = (ac > 5) ? ax[5] : -1.f;
+    a.trigsHeld = (l2val > 0.f && r2val > 0.f);
+
+    // Stick esquerdo: sempre voo
     if(JS_AIL < ac) a.ail = applyDZ(ax[JS_AIL]);
     if(JS_ELV < ac) a.elv = applyDZ(ax[JS_ELV]);
-    if(JS_RDR < ac) a.rdr = applyDZ(ax[JS_RDR]);
 
-    // Throttle incremental: stick pra cima (−Y) aumenta, pra baixo diminui.
-    // Taxa proporcional à deflexão do stick.
-    if(JS_THR < ac){
-        float raw = applyDZ(ax[JS_THR]);
-        // Convenção GLFW: stick para cima = −1. Inverte para +1 = sobe.
-        a.thr = std::clamp(a.thr + (-raw) * JS_THR_RATE * dt, 0.f, 1.f);
+    // Stick direito: comportamento depende do modo
+    float rX = (ac > 2) ? applyDZ(ax[2]) : 0.f;
+    float rY = (ac > 3) ? applyDZ(ax[3]) : 0.f;
+
+    if (a.trigsHeld) {
+        // L2+R2 seguros → orbita câmera externa (ângulos persistem ao soltar)
+        constexpr float CAM_ROT = 1.8f;
+        a.camYaw   += -rX * CAM_ROT * dt;
+        a.camPitch  = std::clamp(a.camPitch + rY * CAM_ROT * dt, -1.4f, 1.4f);
+    } else if (a.cockpit) {
+        // Modo cockpit (sem gatilhos) → olhar com a cabeça
+        constexpr float HEAD_ROT = 1.5f;
+        a.headYaw   = std::clamp(a.headYaw   + rX * HEAD_ROT * dt,  -1.2f,  1.2f);
+        a.headPitch = std::clamp(a.headPitch + (-rY)* HEAD_ROT * dt, -0.6f,  0.5f);
+    } else {
+        // Voo normal → leme + manete
+        a.rdr = rX;
+        a.thr = std::clamp(a.thr + (-rY) * JS_THR_RATE * dt, 0.f, 1.f);
     }
 
     int bc; const unsigned char* bt = glfwGetJoystickButtons(jid, &bc);
@@ -278,7 +304,6 @@ static bool readJoystick(Axes& a, float dt){
         a.flaps = gFlapsStep;
 
         // ── Trim (D-pad: ↑↓ = pitch, ←→ = roll) ─────────────────────────────
-        // Índices Xbox/DInput típicos: 10=↑ 11=→ 12=↓ 13=←
         constexpr float JT = 0.25f;
         if(B(10)) a.trimElev = std::max(-1.f, a.trimElev - JT*dt); // ↑ = picar
         if(B(12)) a.trimElev = std::min( 1.f, a.trimElev + JT*dt); // ↓ = cabrar
@@ -288,8 +313,24 @@ static bool readJoystick(Axes& a, float dt){
         // ── Start = pausa ─────────────────────────────────────────────────────
         a.pauseBtn = B(7);
 
-        // ── Y/△ = reversor (pré-mapeado — ativo quando thrust reverser implementado)
+        // ── Y/△ = reversor ────────────────────────────────────────────────────
         a.reverser = B(3);
+
+        // ── R3 click = resetar câmera ao padrão ──────────────────────────────
+        // B(9)=R3 Xbox/DInput  B(11)=R3 PS4/DualSense
+        static bool prevR3 = false;
+        bool r3 = B(9) || B(11);
+        if(r3 && !prevR3){
+            a.camYaw   = 0.f;  a.camPitch  = 0.26f;  // órbita → padrão
+            a.headYaw  = 0.f;  a.headPitch = 0.f;     // cabeça → frente
+        }
+        prevR3 = r3;
+
+        // ── Círculo/B = alternar câmera cockpit / externa ─────────────────────
+        static bool prevCircle = false;
+        bool circle = B(1);
+        if(circle && !prevCircle) a.cockpit = !a.cockpit;
+        prevCircle = circle;
     }
     return true;
 }
@@ -376,37 +417,54 @@ static glm::vec3 aircraftForward(const Telemetry& t){
     ));
 }
 
-// Câmera chase com suavização: evita tremor ao virar.
-// Usa slerp do vetor "forward" suavizado com constante de tempo de ~0.12 s.
-static glm::mat4 chaseView(const Telemetry& t){
-    static glm::vec3 sFwd{0.f, 0.f, -1.f};   // forward suavizado
+// ── Câmera orbital (substitui chaseView) ─────────────────────────────────────
+// yaw=0 → atrás do avião, yaw=π → nariz. pitch=0.26 rad (~15°) = padrão chase.
+// Ângulos são PERSISTENTES: não voltam ao soltar L2+R2.
+// forward é suavizado (alpha=0.80) para eliminar tremor em viradas.
+static glm::mat4 orbitView(const Telemetry& t, float yaw, float pitch){
+    static glm::vec3 sFwd{0.f, 0.f, -1.f};
     static bool sInit = false;
-
     glm::vec3 fwdTarget = aircraftForward(t);
-
-    if (!sInit) {
-        sFwd  = fwdTarget;
-        sInit = true;
-    }
-
-    // alpha ≈ 1 − e^(−dt/tau). Fixa dt=1/60, tau=0.10 s → alpha≈0.80
-    // Valor alto = câmera mais "colada" ao avião (menos lag, menos tremor).
-    const float alpha = 0.80f;
-    sFwd = glm::normalize(glm::mix(sFwd, fwdTarget, alpha));
+    if (!sInit){ sFwd = fwdTarget; sInit = true; }
+    sFwd = glm::normalize(glm::mix(sFwd, fwdTarget, 0.80f));
 
     glm::vec3 worldUp(0,1,0);
     glm::vec3 right = glm::normalize(glm::cross(sFwd, worldUp));
-    glm::vec3 up    = glm::normalize(glm::cross(right, sFwd));
-    glm::vec3 camPos = -sFwd * 30.f + up * 8.f;
+    glm::vec3 acUp  = glm::normalize(glm::cross(right, sFwd));
+
+    constexpr float DIST = 30.f;
+    glm::vec3 hDir  = -sFwd * std::cos(yaw) + right * std::sin(yaw);
+    glm::vec3 camPos = hDir * std::cos(pitch) * DIST + acUp * std::sin(pitch) * DIST;
     glm::vec3 target = sFwd * 5.f;
-    return glm::lookAt(camPos, target, up);
+    return glm::lookAt(camPos, target, worldUp);
 }
 
-static glm::vec3 chaseCamOffset(const Telemetry& t){
-    glm::vec3 fwd = aircraftForward(t);
-    glm::vec3 right = glm::normalize(glm::cross(fwd, glm::vec3(0,1,0)));
-    glm::vec3 up    = glm::normalize(glm::cross(right, fwd));
-    return -fwd * 30.f + up * 8.f;
+// ── Câmera cockpit com movimento de cabeça ────────────────────────────────────
+// eyeLocal: posição do olho do capitão no body-frame do modelo (GL: X=lat, Y=up, Z=fwd=-Z)
+// headYaw/headPitch: desvio do olhar em relação ao nariz (stick direito no cockpit)
+static glm::mat4 cockpitView(const Telemetry& t, float headYaw, float headPitch){
+    // Atitude do avião → world frame
+    glm::mat4 R(1.f);
+    R = glm::rotate(R, -(float)t.yaw,   glm::vec3(0,1,0));
+    R = glm::rotate(R,  (float)t.pitch, glm::vec3(1,0,0));
+    R = glm::rotate(R, -(float)t.roll,  glm::vec3(0,0,1));
+
+    // Olho do capitão no body-frame → world
+    glm::vec3 eye   = glm::vec3(R * glm::vec4(0.35f, 2.3f, -9.5f, 1.f));
+    glm::vec3 fwdW  = glm::vec3(R * glm::vec4(0.f, 0.f, -1.f, 0.f));
+    glm::vec3 upW   = glm::vec3(R * glm::vec4(0.f, 1.f,  0.f, 0.f));
+    glm::vec3 rightW = glm::normalize(glm::cross(fwdW, upW));
+
+    // Aplica movimento de cabeça:
+    // headYaw  → rotaciona fwdW em torno do upW (olhar esq/dir)
+    // headPitch→ rotaciona em torno do rightW (olhar cima/baixo)
+    glm::mat4 Ryaw   = glm::rotate(glm::mat4(1.f), headYaw,   upW);
+    fwdW  = glm::normalize(glm::vec3(Ryaw * glm::vec4(fwdW,  0.f)));
+    rightW= glm::normalize(glm::cross(fwdW, upW));
+    glm::mat4 Rpitch = glm::rotate(glm::mat4(1.f), headPitch, rightW);
+    fwdW  = glm::normalize(glm::vec3(Rpitch * glm::vec4(fwdW, 0.f)));
+
+    return glm::lookAt(eye, eye + fwdW * 50.f, upW);
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -475,12 +533,21 @@ int main(){
 
     // Shader + modelo 3D E195
     GLuint modelProg = makeProgram(MODEL_VERT, MODEL_FRAG);
-    GLuint animProg  = makeProgram(ANIM_VERT,  MODEL_FRAG);  // same frag shader
+    GLuint animProg  = makeProgram(ANIM_VERT,  MODEL_FRAG);
     AcModel e195;
     {
         std::string objPath = std::string(MODELS_PATH) + "/erj195.obj";
         if (!e195.load(objPath))
             fprintf(stderr, "[main] E195 model failed to load from %s\n", objPath.c_str());
+    }
+    // Cockpit (câmera interna) — modelo estático sem partes animadas
+    AcModel cockpit;
+    {
+        std::string objPath = std::string(MODELS_PATH) + "/cockpit.obj";
+        if (!cockpit.load(objPath))
+            fprintf(stderr, "[main] Cockpit model failed to load from %s\n", objPath.c_str());
+        else
+            printf("[main] Cockpit loaded.\n");
     }
     float gearAnimPos = 1.f;   // 1=extended, 0=retracted
     static float fanAngle = 0.f;
@@ -659,8 +726,22 @@ int main(){
         int fw,fh; glfwGetFramebufferSize(win,&fw,&fh);
         glViewport(0,0,fw,fh);
         float aspect = fw>0&&fh>0 ? (float)fw/(float)fh : 16.f/9.f;
-        glm::mat4 proj = glm::perspective(glm::radians(70.f),aspect,0.5f,200000.f);
-        glm::mat4 view = chaseView(tel);
+
+        // ── Seleção de câmera ──────────────────────────────────────────────────
+        glm::mat4 view;
+        float fovDeg   = 70.f;
+        float nearClip = 0.5f;
+        if (axes.cockpit) {
+            // Visão interna: FOV mais amplo, clip próximo para ver instrumentos
+            view     = cockpitView(tel, axes.headYaw, axes.headPitch);
+            fovDeg   = 80.f;
+            nearClip = 0.05f;
+        } else {
+            // Visão externa: órbita ao redor do avião (ângulos persistentes)
+            // camYaw=0, camPitch=0.26 → comportamento idêntico ao chase original
+            view = orbitView(tel, axes.camYaw, axes.camPitch);
+        }
+        glm::mat4 proj = glm::perspective(glm::radians(fovDeg), aspect, nearClip, 200000.f);
 
         // Redireciona render para FBO HDR (bloom será aplicado depois)
         postfx.bind(fw, fh);
@@ -689,33 +770,44 @@ int main(){
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);
 
-        // 4. Modelo 3D E195
+        // 4. Modelo 3D — exterior (E195) ou cockpit (visão interna)
         // Ordem YXZ: yaw → pitch → roll
-        glm::mat4 acModel(1.f);
-        acModel=glm::rotate(acModel,-(float)tel.yaw,   glm::vec3(0,1,0));
-        acModel=glm::rotate(acModel, (float)tel.pitch, glm::vec3(1,0,0));
-        acModel=glm::rotate(acModel,-(float)tel.roll,  glm::vec3(0,0,1));
-        glm::mat4 mvp = proj*view*acModel;
-        if (e195.ok()) {
-            // Fan speed: N1 0-100 → ~20 rad/s at full power (visual only)
-            fanAngle += (float)(tel.n1[0] / 100.0 * 20.0 * dt);
-            AcAnimState animState;
-            animState.aileronL = surfCmd.aileronL;
-            animState.aileronR = surfCmd.aileronR;
-            animState.elevL    = surfCmd.elevLH;
-            animState.elevR    = surfCmd.elevRH;
-            animState.rudder   = surfCmd.rudder;
-            animState.flaps    = axes.flaps;
-            animState.spoilerL = surfCmd.spoilerL;
-            animState.spoilerR = surfCmd.spoilerR;
-            animState.gearPos  = gearAnimPos;
-            animState.fanAngle = fanAngle;
-            e195.draw(modelProg, animProg, mvp, animState);
+        glm::mat4 acRot(1.f);
+        acRot = glm::rotate(acRot, -(float)tel.yaw,   glm::vec3(0,1,0));
+        acRot = glm::rotate(acRot,  (float)tel.pitch, glm::vec3(1,0,0));
+        acRot = glm::rotate(acRot, -(float)tel.roll,  glm::vec3(0,0,1));
+        glm::mat4 mvp = proj * view * acRot;
+
+        // Fan speed: N1 0-100 → ~20 rad/s at full power (visual only)
+        fanAngle += (float)(tel.n1[0] / 100.0 * 20.0 * dt);
+
+        if (axes.cockpit) {
+            // Visão interna: renderiza cockpit, omite exterior
+            if (cockpit.ok()) {
+                AcAnimState noAnim;
+                cockpit.draw(modelProg, animProg, mvp, noAnim);
+            }
         } else {
-            glUseProgram(prog);
-            glUniformMatrix4fv(uMVP,1,GL_FALSE,glm::value_ptr(mvp));
-            glUniform1f(uPtSize,1.f);
-            glUniform1i(uCircle,0);
+            // Visão externa: renderiza fuselagem + superfícies animadas
+            if (e195.ok()) {
+                AcAnimState animState;
+                animState.aileronL = surfCmd.aileronL;
+                animState.aileronR = surfCmd.aileronR;
+                animState.elevL    = surfCmd.elevLH;
+                animState.elevR    = surfCmd.elevRH;
+                animState.rudder   = surfCmd.rudder;
+                animState.flaps    = axes.flaps;
+                animState.spoilerL = surfCmd.spoilerL;
+                animState.spoilerR = surfCmd.spoilerR;
+                animState.gearPos  = gearAnimPos;
+                animState.fanAngle = fanAngle;
+                e195.draw(modelProg, animProg, mvp, animState);
+            } else {
+                glUseProgram(prog);
+                glUniformMatrix4fv(uMVP,1,GL_FALSE,glm::value_ptr(mvp));
+                glUniform1f(uPtSize,1.f);
+                glUniform1i(uCircle,0);
+            }
         }
 
         // 4. Pontos de contato (esferas grandes)
@@ -988,7 +1080,7 @@ int main(){
 
     sky.cleanup(); farTiles.cleanup(); closeTiles.cleanup();
     clouds.cleanup(); airports.cleanup(); osm.cleanup(); postfx.cleanup();
-    e195.cleanup();
+    e195.cleanup(); cockpit.cleanup();
     glDeleteVertexArrays(1,&ptVAO); glDeleteBuffers(1,&ptVBO);
     glDeleteProgram(prog); glDeleteProgram(modelProg); glDeleteProgram(animProg);
     ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();

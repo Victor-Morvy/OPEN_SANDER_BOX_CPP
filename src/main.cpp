@@ -140,6 +140,8 @@ struct Axes {
     float ail=0, elv=0, rdr=0, thr=0.50f, brk=0, flaps=0;
     float trimElev=0, trimAil=0;   // trim persistente (numpad 8/5=pitch, 4/6=roll)
     bool gear=false;
+    bool pauseBtn=false;   // Start — nível, edge detectado no main loop
+    bool reverser=false;   // Y/△ — pré-mapeado, ainda não funcional
 };
 
 static bool gGearPrev = false;
@@ -196,16 +198,37 @@ static bool readJoystick(Axes& a, float dt){
         a.thr = std::clamp(a.thr + (-raw) * JS_THR_RATE * dt, 0.f, 1.f);
     }
 
-    // Botões: índice 0 = freio, índice 2 = gear toggle
     int bc; const unsigned char* bt = glfwGetJoystickButtons(jid, &bc);
     if(bt){
-        if(bc > 0) a.brk = bt[0] ? 1.f : 0.f;
-        if(bc > 2){
-            static bool prevGear2 = false;
-            bool gNow2 = bt[2] != 0;
-            if(gNow2 && !prevGear2) gGearDown = !gGearDown;
-            prevGear2 = gNow2;
-        }
+        auto B = [&](int i) -> bool { return i < bc && bt[i]; };
+
+        // ── Superfícies ──────────────────────────────────────────────────────
+        a.brk     = B(0) ? 1.f : 0.f;                    // A / Cruz = freio
+
+        static bool prevGear=false;
+        if(B(2) && !prevGear) gGearDown = !gGearDown;    // X / □ = trem
+        prevGear = B(2);
+
+        // ── Flaps (LB/L1=subir, RB/R1=descer) ───────────────────────────────
+        static bool prevLB=false, prevRB=false;
+        if(B(4) && !prevLB) gFlapsStep = std::max(0.f, gFlapsStep - 1.f/6.f);
+        if(B(5) && !prevRB) gFlapsStep = std::min(1.f, gFlapsStep + 1.f/6.f);
+        prevLB = B(4); prevRB = B(5);
+        a.flaps = gFlapsStep;
+
+        // ── Trim (D-pad: ↑↓ = pitch, ←→ = roll) ─────────────────────────────
+        // Índices Xbox/DInput típicos: 10=↑ 11=→ 12=↓ 13=←
+        constexpr float JT = 0.25f;
+        if(B(10)) a.trimElev = std::max(-1.f, a.trimElev - JT*dt); // ↑ = picar
+        if(B(12)) a.trimElev = std::min( 1.f, a.trimElev + JT*dt); // ↓ = cabrar
+        if(B(13)) a.trimAil  = std::max(-1.f, a.trimAil  - JT*dt); // ← = roll esq
+        if(B(11)) a.trimAil  = std::min( 1.f, a.trimAil  + JT*dt); // → = roll dir
+
+        // ── Start = pausa ─────────────────────────────────────────────────────
+        a.pauseBtn = B(7);
+
+        // ── Y/△ = reversor (pré-mapeado — ativo quando thrust reverser implementado)
+        a.reverser = B(3);
     }
     return true;
 }
@@ -474,7 +497,7 @@ int main(){
 
         // ── Toggle de pausa (P) ────────────────────────────────────────────────
         {
-            bool pNow = glfwGetKey(win, GLFW_KEY_P) == GLFW_PRESS;
+            bool pNow = glfwGetKey(win, GLFW_KEY_P) == GLFW_PRESS || axes.pauseBtn;
             if (pNow && !pPrev && fdmOk) {
                 if (!paused) {
                     fdm.pause();

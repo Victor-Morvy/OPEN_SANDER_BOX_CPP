@@ -25,12 +25,14 @@ static const char* WALL_VERT = R"glsl(
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
-uniform mat4 uVP;
+uniform mat4  uVP;
 uniform float uBaseY;
+uniform vec3  uAcPos;
 out vec3 vNormal;
 out vec2 vUV;
 void main(){
-    gl_Position = uVP * vec4(aPos.x, aPos.y + uBaseY, aPos.z, 1.0);
+    vec3 world = vec3(aPos.x, aPos.y + uBaseY + 0.3, aPos.z);
+    gl_Position = uVP * vec4(world - uAcPos, 1.0);
     vNormal = aNormal;
     vUV = aUV;
 }
@@ -54,10 +56,12 @@ void main(){
 static const char* FLAT_VERT = R"glsl(
 #version 330 core
 layout(location=0) in vec3 aPos;
-uniform mat4 uVP;
+uniform mat4  uVP;
 uniform float uBaseY;
+uniform vec3  uAcPos;
 void main(){
-    gl_Position = uVP * vec4(aPos.x, aPos.y + uBaseY, aPos.z, 1.0);
+    vec3 world = vec3(aPos.x, aPos.y + uBaseY + 0.3, aPos.z);
+    gl_Position = uVP * vec4(world - uAcPos, 1.0);
 }
 )glsl";
 
@@ -76,10 +80,11 @@ static const char* WATER_VERT = R"glsl(
 layout(location=0) in vec3 aPos;
 uniform mat4  uVP;
 uniform float uBaseY;
+uniform vec3  uAcPos;
 out vec3 vWorld;
 void main(){
     vWorld      = vec3(aPos.x, aPos.y + uBaseY, aPos.z);
-    gl_Position = uVP * vec4(vWorld, 1.0);
+    gl_Position = uVP * vec4(vWorld - uAcPos, 1.0);
 }
 )glsl";
 
@@ -255,12 +260,23 @@ void OSMManager::genFacadeTextures() {
 
 // ── update ────────────────────────────────────────────────────────────────────
 
-static constexpr double CELL_DEG = 0.05;  // ~5.5 km
+static constexpr double CELL_DEG = 0.08;  // ~8.9 km — bbox 0.16°×0.16° (~17.5km), rebuild cada ~2.5 min a 120kts
 
 void OSMManager::update(double acLat, double acLon,
                         TileManager& close, TileManager& far_) {
-    // Upload any pending batch (main thread — GL allowed)
+    // Upload batch in chunks to avoid single-frame GL stall
     uploadPending(close, far_);
+
+    // Retry baseY only for meshes that got 0 at upload time (tile not loaded yet).
+    // Once a mesh has a valid elevation, never change it — avoids jitter from
+    // tile-boundary bilinear differences.
+    for (auto& m : _meshes) {
+        if (m.baseY != 0.f) continue;
+        glm::vec3 cPos{m.centroidXZ.x, 0.f, m.centroidXZ.y};
+        float e = close.getElevAt(cPos);
+        if (e == 0.f) e = far_.getElevAt(cPos);
+        if (e != 0.f) m.baseY = e;
+    }
 
     int cx = (int)std::floor(acLat / CELL_DEG);
     int cz = (int)std::floor(acLon / CELL_DEG);
@@ -268,7 +284,6 @@ void OSMManager::update(double acLat, double acLon,
     _lastCellX = cx;
     _lastCellZ = cz;
 
-    // Increment generation to cancel in-flight fetch
     ++_gen;
     if (_thread.joinable()) _thread.detach();
     clearMeshes();
@@ -300,8 +315,8 @@ void OSMManager::uploadPending(TileManager& close, TileManager& far_) {
         g.type          = r.type;
         g.flatColor     = r.flatColor;
         g.facadeVariant = r.facadeVariant;
+        g.centroidXZ    = r.centroidXZ;
 
-        // Sample terrain elevation at centroid (main thread, GL safe)
         glm::vec3 cPos{r.centroidXZ.x, 0.f, r.centroidXZ.y};
         g.baseY = close.getElevAt(cPos);
         if (g.baseY == 0.f) g.baseY = far_.getElevAt(cPos);
@@ -356,11 +371,17 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
     if (_meshes.empty()) return;
     glDisable(GL_CULL_FACE);
 
+    // Polygon offset: empurra OSM geometry para a câmera para ganhar
+    // o depth test contra o terrain mesh (evita z-fighting).
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.f, -50.f);
+
     // ── Building walls ────────────────────────────────────────────────────────
     glUseProgram(_wallProg);
     glUniformMatrix4fv(glGetUniformLocation(_wallProg, "uVP"), 1, GL_FALSE,
                        glm::value_ptr(VP));
     glUniform1f(glGetUniformLocation(_wallProg, "uDay"), dayT);
+    glUniform3fv(glGetUniformLocation(_wallProg, "uAcPos"), 1, glm::value_ptr(camPos));
     GLint wallBaseY = glGetUniformLocation(_wallProg, "uBaseY");
     GLint wallTex   = glGetUniformLocation(_wallProg, "uTex");
     glUniform1i(wallTex, 0);
@@ -379,6 +400,7 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
     glUniformMatrix4fv(glGetUniformLocation(_flatProg, "uVP"), 1, GL_FALSE,
                        glm::value_ptr(VP));
     glUniform1f(glGetUniformLocation(_flatProg, "uDay"), dayT);
+    glUniform3fv(glGetUniformLocation(_flatProg, "uAcPos"), 1, glm::value_ptr(camPos));
     GLint flatBaseY = glGetUniformLocation(_flatProg, "uBaseY");
     GLint flatColor = glGetUniformLocation(_flatProg, "uColor");
 
@@ -390,32 +412,9 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
         glDrawElements(GL_TRIANGLES, (GLsizei)m.indexCount, GL_UNSIGNED_INT, nullptr);
     }
 
-    // ── Water ─────────────────────────────────────────────────────────────────
-    bool hasWater = false;
-    for (auto& m : _meshes) if (m.type == WATER) { hasWater = true; break; }
+    // Water: desligado temporariamente
 
-    if (hasWater) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        glUseProgram(_waterProg);
-        glUniformMatrix4fv(glGetUniformLocation(_waterProg, "uVP"), 1, GL_FALSE,
-                           glm::value_ptr(VP));
-        glUniform1f(glGetUniformLocation(_waterProg, "uDay"),  dayT);
-        glUniform1f(glGetUniformLocation(_waterProg, "uTime"), timeS);
-        glUniform3fv(glGetUniformLocation(_waterProg, "uCamPos"), 1,
-                     glm::value_ptr(camPos));
-        GLint waterBaseY = glGetUniformLocation(_waterProg, "uBaseY");
-
-        for (auto& m : _meshes) {
-            if (m.type != WATER || m.indexCount == 0) continue;
-            glUniform1f(waterBaseY, m.baseY);
-            glBindVertexArray(m.vao);
-            glDrawElements(GL_TRIANGLES, (GLsizei)m.indexCount, GL_UNSIGNED_INT, nullptr);
-        }
-        glDisable(GL_BLEND);
-    }
-
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
     glUseProgram(0);
@@ -473,41 +472,57 @@ void OSMManager::fetchAsync(double lat, double lon, int gen) {
         snprintf(bbox, sizeof(bbox), "%.6f,%.6f,%.6f,%.6f", s, w, n, e);
 
         std::string q;
-        q += "[out:json][timeout:60];(\n";
+        q += "[out:json][timeout:90][maxsize:30000000];(\n";
         q += "  way[\"building\"]("; q += bbox; q += ");\n";
-        q += "  way[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|residential|service\"]("; q += bbox; q += ");\n";
+        q += "  way[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|residential\"]("; q += bbox; q += ");\n";
         q += "  way[\"natural\"=\"water\"]("; q += bbox; q += ");\n";
         q += "  way[\"waterway\"~\"river|canal\"]("; q += bbox; q += ");\n";
         q += ");out body geom;";
 
         std::string postBody = "data=" + urlEncode(q);
+
+        // Tenta dois endpoints: primário e fallback
+        static const char* ENDPOINTS[] = {
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter",
+        };
+
         std::string resp;
+        bool ok = false;
 
-        CURL* c = curl_easy_init();
-        if (!c) return;
-        curl_easy_setopt(c, CURLOPT_URL,           "https://overpass-api.de/api/interpreter");
-        curl_easy_setopt(c, CURLOPT_POSTFIELDS,    postBody.c_str());
-        curl_easy_setopt(c, CURLOPT_TIMEOUT,       75L);
-        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curlWrite);
-        curl_easy_setopt(c, CURLOPT_WRITEDATA,     &resp);
-        curl_easy_setopt(c, CURLOPT_USERAGENT,     "WebFlightSim/1.0");
-        curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION,1L);
+        for (const char* url : ENDPOINTS) {
+            if (_gen.load() != gen) return;
+            resp.clear();
 
-        CURLcode res = curl_easy_perform(c);
-        long httpCode = 0;
-        curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &httpCode);
-        curl_easy_cleanup(c);
+            CURL* c = curl_easy_init();
+            if (!c) continue;
+            curl_easy_setopt(c, CURLOPT_URL,              url);
+            curl_easy_setopt(c, CURLOPT_POSTFIELDS,       postBody.c_str());
+            curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT,   20L);
+            curl_easy_setopt(c, CURLOPT_TIMEOUT,          120L);
+            curl_easy_setopt(c, CURLOPT_WRITEFUNCTION,    curlWrite);
+            curl_easy_setopt(c, CURLOPT_WRITEDATA,        &resp);
+            curl_easy_setopt(c, CURLOPT_USERAGENT,        "WebFlightSim/1.0");
+            curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION,   1L);
 
-        if (res == CURLE_OK && httpCode == 200) {
-            json = std::move(resp);
-            FILE* f = fopen(cacheFile, "wb");
-            if (f) { fwrite(json.data(), 1, json.size(), f); fclose(f); }
-            printf("[OSM] fetched %.1f KB for bbox %s\n",
-                   json.size() / 1024.0, bbox);
-        } else {
-            fprintf(stderr, "[OSM] Overpass error curl=%d http=%ld\n", res, httpCode);
-            return;
+            CURLcode res = curl_easy_perform(c);
+            long httpCode = 0;
+            curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &httpCode);
+            curl_easy_cleanup(c);
+
+            if (res == CURLE_OK && httpCode == 200) {
+                ok = true;
+                printf("[OSM] fetched %.1f KB from %s\n", resp.size()/1024.0, url);
+                break;
+            }
+            fprintf(stderr, "[OSM] %s — curl=%d http=%ld\n", url, res, httpCode);
         }
+
+        if (!ok) return;
+
+        json = std::move(resp);
+        FILE* f = fopen(cacheFile, "wb");
+        if (f) { fwrite(json.data(), 1, json.size(), f); fclose(f); }
     } else {
         printf("[OSM] cache hit (%zu bytes)\n", json.size());
     }
@@ -610,11 +625,11 @@ void OSMManager::addBuilding(const std::vector<std::pair<double,double>>& pts,
     for (auto& p : pts) { sumLat+=p.first; sumLon+=p.second; }
     glm::vec2 centXZ = toWorld(sumLat/pts.size(), sumLon/pts.size());
 
-    // Polygon in local coords (relative to centroid)
+    // Polygon in absolute world XZ (same datum as terrain tiles)
     std::vector<glm::vec2> poly;
     poly.reserve(pts.size());
     for (auto& p : pts)
-        poly.push_back(toWorld(p.first, p.second) - centXZ);
+        poly.push_back(toWorld(p.first, p.second));
 
     // Remove closing duplicate
     if (poly.size() > 1 &&
@@ -692,8 +707,8 @@ void OSMManager::addRoad(const std::vector<std::pair<double,double>>& pts,
     road.centroidXZ = centXZ;
 
     for (size_t i = 0; i+1 < pts.size(); i++) {
-        glm::vec2 a = toWorld(pts[i].first,   pts[i].second)   - centXZ;
-        glm::vec2 b = toWorld(pts[i+1].first, pts[i+1].second) - centXZ;
+        glm::vec2 a = toWorld(pts[i].first,   pts[i].second);
+        glm::vec2 b = toWorld(pts[i+1].first, pts[i+1].second);
         float dx = b.x-a.x, dz = b.y-a.y;
         float len = std::sqrtf(dx*dx + dz*dz);
         if (len < 0.01f) continue;
@@ -725,7 +740,7 @@ void OSMManager::addWater(const std::vector<std::pair<double,double>>& pts,
     std::vector<glm::vec2> poly;
     poly.reserve(pts.size());
     for (auto& p : pts)
-        poly.push_back(toWorld(p.first, p.second) - centXZ);
+        poly.push_back(toWorld(p.first, p.second));
 
     if (poly.size() > 1 &&
         glm::length(poly.front() - poly.back()) < 0.05f)

@@ -146,28 +146,102 @@ static bool gGearPrev = false;
 static bool gGearDown = false;
 static float gFlapsStep = 0.f;   // 0..1 em passos de 1/6
 
+// ── Joystick ──────────────────────────────────────────────────────────────────
+// Mapeamento atual (right stick gamepad):
+//   Eixo 0 = elevator  (pitch,  +puxar/cabrar)   ← right stick Y
+//   Eixo 1 = aileron   (roll,   +direita)         ← right stick X
+//   Eixo 2 = throttle  (taxa: +1=cima → sobe, −1=baixo → desce)
+//   Eixo 3 = rudder    (yaw,   +direita)
+// Ajuste as constantes abaixo se os eixos forem diferentes.
+
+static constexpr int   JS_AIL = 0, JS_ELV = 1, JS_THR = 3, JS_RDR = 2;
+static constexpr float JS_DZ  = 0.08f;   // deadzone 8%
+static constexpr float JS_THR_RATE = 0.6f;  // unidades/s com stick a fundo
+
+static float applyDZ(float v){
+    if(fabsf(v) < JS_DZ) return 0.f;
+    float s = v > 0.f ? 1.f : -1.f;
+    return s * (fabsf(v) - JS_DZ) / (1.f - JS_DZ);
+}
+
+static bool readJoystick(Axes& a, float dt){
+    // Encontra o primeiro joystick conectado
+    int jid = -1;
+    for(int i = GLFW_JOYSTICK_1; i <= GLFW_JOYSTICK_LAST; ++i)
+        if(glfwJoystickPresent(i)){ jid = i; break; }
+    if(jid < 0) return false;
+
+    // Imprime nome e eixos na primeira detecção
+    static int lastJid = -1;
+    if(jid != lastJid){
+        lastJid = jid;
+        printf("[Joy] Conectado: %s\n", glfwGetJoystickName(jid));
+        int ac; const float* ax = glfwGetJoystickAxes(jid, &ac);
+        printf("[Joy] %d eixos detectados\n", ac);
+        for(int i=0;i<ac;++i) printf("  eixo[%d] = %.3f\n", i, ax[i]);
+    }
+
+    int ac; const float* ax = glfwGetJoystickAxes(jid, &ac);
+    if(!ax) return false;
+
+    if(JS_AIL < ac) a.ail = applyDZ(ax[JS_AIL]);
+    if(JS_ELV < ac) a.elv = applyDZ(ax[JS_ELV]);
+    if(JS_RDR < ac) a.rdr = applyDZ(ax[JS_RDR]);
+
+    // Throttle incremental: stick pra cima (−Y) aumenta, pra baixo diminui.
+    // Taxa proporcional à deflexão do stick.
+    if(JS_THR < ac){
+        float raw = applyDZ(ax[JS_THR]);
+        // Convenção GLFW: stick para cima = −1. Inverte para +1 = sobe.
+        a.thr = std::clamp(a.thr + (-raw) * JS_THR_RATE * dt, 0.f, 1.f);
+    }
+
+    // Botões: índice 0 = freio, índice 2 = gear toggle
+    int bc; const unsigned char* bt = glfwGetJoystickButtons(jid, &bc);
+    if(bt){
+        if(bc > 0) a.brk = bt[0] ? 1.f : 0.f;
+        if(bc > 2){
+            static bool prevGear2 = false;
+            bool gNow2 = bt[2] != 0;
+            if(gNow2 && !prevGear2) gGearDown = !gGearDown;
+            prevGear2 = gNow2;
+        }
+    }
+    return true;
+}
+
 static void updateAxes(Axes& a, GLFWwindow* w, float dt){
     auto K=[&](int k){return glfwGetKey(w,k)==GLFW_PRESS;};
 
-    // Rolagem (wheel)
-    if(K(GLFW_KEY_RIGHT)) a.ail=std::min(1.f,a.ail+CTRL_RATE*dt);
-    else if(K(GLFW_KEY_LEFT)) a.ail=std::max(-1.f,a.ail-CTRL_RATE*dt);
-    else a.ail*=std::max(0.f,1.f-CTRL_RET*dt);
+    bool hasJoy = readJoystick(a, dt);
 
-    // Arfagem (column) — DOWN = puxar = nariz sobe (convenção stick)
-    if(K(GLFW_KEY_DOWN)) a.elv=std::min(1.f,a.elv+CTRL_RATE*dt);
-    else if(K(GLFW_KEY_UP)) a.elv=std::max(-1.f,a.elv-CTRL_RATE*dt);
-    else a.elv*=std::max(0.f,1.f-CTRL_RET*dt);
+    // Teclado só atua nos eixos que o joystick não cobriu
+    if(!hasJoy){
+        // Rolagem (wheel)
+        if(K(GLFW_KEY_RIGHT)) a.ail=std::min(1.f,a.ail+CTRL_RATE*dt);
+        else if(K(GLFW_KEY_LEFT)) a.ail=std::max(-1.f,a.ail-CTRL_RATE*dt);
+        else a.ail*=std::max(0.f,1.f-CTRL_RET*dt);
 
-    // Pedais (rudder / nariz)
-    if(K(GLFW_KEY_D)) a.rdr=std::min(1.f,a.rdr+CTRL_RATE*dt);
-    else if(K(GLFW_KEY_A)) a.rdr=std::max(-1.f,a.rdr-CTRL_RATE*dt);
-    else a.rdr*=std::max(0.f,1.f-CTRL_RET*dt);
+        // Arfagem (column) — DOWN = puxar = nariz sobe (convenção stick)
+        if(K(GLFW_KEY_DOWN)) a.elv=std::min(1.f,a.elv+CTRL_RATE*dt);
+        else if(K(GLFW_KEY_UP)) a.elv=std::max(-1.f,a.elv-CTRL_RATE*dt);
+        else a.elv*=std::max(0.f,1.f-CTRL_RET*dt);
 
-    // Potência
-    if(K(GLFW_KEY_W)) a.thr=std::min(1.f,a.thr+.5f*dt);
-    if(K(GLFW_KEY_S)) a.thr=std::max(0.f,a.thr-.5f*dt);
-    a.brk=K(GLFW_KEY_B)?1.f:0.f;
+        // Pedais (rudder / nariz)
+        if(K(GLFW_KEY_D)) a.rdr=std::min(1.f,a.rdr+CTRL_RATE*dt);
+        else if(K(GLFW_KEY_A)) a.rdr=std::max(-1.f,a.rdr-CTRL_RATE*dt);
+        else a.rdr*=std::max(0.f,1.f-CTRL_RET*dt);
+
+        // Potência
+        if(K(GLFW_KEY_W)) a.thr=std::min(1.f,a.thr+.5f*dt);
+        if(K(GLFW_KEY_S)) a.thr=std::max(0.f,a.thr-.5f*dt);
+    } else {
+        // Com joystick: teclado W/S ainda ajusta throttle incrementalmente
+        if(K(GLFW_KEY_W)) a.thr=std::min(1.f,a.thr+.3f*dt);
+        if(K(GLFW_KEY_S)) a.thr=std::max(0.f,a.thr-.3f*dt);
+    }
+
+    a.brk = (a.brk > 0.f) ? a.brk : (K(GLFW_KEY_B)?1.f:0.f);
 
     // Trem de pouso (G — toggle)
     bool gNow = K(GLFW_KEY_G);
@@ -218,19 +292,29 @@ static glm::vec3 aircraftForward(const Telemetry& t){
     ));
 }
 
-// Câmera chase: segue as COSTAS do avião usando yaw + pitch do JSBSim.
-// O avião está na origem do render space; câmera fica atrás dele.
+// Câmera chase com suavização: evita tremor ao virar.
+// Usa slerp do vetor "forward" suavizado com constante de tempo de ~0.12 s.
 static glm::mat4 chaseView(const Telemetry& t){
-    glm::vec3 fwd = aircraftForward(t);
-    // Referência "cima" estável: mistura o up do corpo com o up do mundo
-    // para evitar gimbal lock em piruetas extremas
+    static glm::vec3 sFwd{0.f, 0.f, -1.f};   // forward suavizado
+    static bool sInit = false;
+
+    glm::vec3 fwdTarget = aircraftForward(t);
+
+    if (!sInit) {
+        sFwd  = fwdTarget;
+        sInit = true;
+    }
+
+    // alpha ≈ 1 − e^(−dt/tau). Fixa dt=1/60, tau=0.10 s → alpha≈0.80
+    // Valor alto = câmera mais "colada" ao avião (menos lag, menos tremor).
+    const float alpha = 0.80f;
+    sFwd = glm::normalize(glm::mix(sFwd, fwdTarget, alpha));
+
     glm::vec3 worldUp(0,1,0);
-    glm::vec3 right = glm::normalize(glm::cross(fwd, worldUp));
-    glm::vec3 up    = glm::normalize(glm::cross(right, fwd));
-    // Câmera: 30 m atrás (direção oposta ao nariz), 8 m acima
-    glm::vec3 camPos = -fwd * 30.f + up * 8.f;
-    // Olha para um ponto 5 m à frente do CG (não o CG em si, para não "olhar para baixo")
-    glm::vec3 target = fwd * 5.f;
+    glm::vec3 right = glm::normalize(glm::cross(sFwd, worldUp));
+    glm::vec3 up    = glm::normalize(glm::cross(right, sFwd));
+    glm::vec3 camPos = -sFwd * 30.f + up * 8.f;
+    glm::vec3 target = sFwd * 5.f;
     return glm::lookAt(camPos, target, up);
 }
 
@@ -281,7 +365,7 @@ int main(){
     //   closeTiles: zoom 15, 7×7 × 1.2 km =  8 km, 64 quads/tile, Y normal
     //   Close renderiza por cima: depth test elimina far onde close está presente.
     TileManager farTiles, closeTiles;
-    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 4, 33, -0.5f); // −0.5 m: close tiles ganham depth test
+    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 4, 33, -5.0f); // −5 m: garante que far tiles fiquem sob close tiles mesmo com erro de resolução
     closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 4, 65,  0.f); // referência de altitude
 
     Clouds clouds; clouds.init();
@@ -431,7 +515,7 @@ int main(){
 
         // Aeroportos (precisa acMslM para PAPI)
         airports.update(acWorld, acMslM, closeTiles, farTiles);
-        osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles);
+        // osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles); // desligado temporariamente
 
         if(fdmOk && !paused){
             // 1. Monta input do piloto
@@ -485,7 +569,7 @@ int main(){
         int fw,fh; glfwGetFramebufferSize(win,&fw,&fh);
         glViewport(0,0,fw,fh);
         float aspect = fw>0&&fh>0 ? (float)fw/(float)fh : 16.f/9.f;
-        glm::mat4 proj = glm::perspective(glm::radians(60.f),aspect,0.5f,200000.f);
+        glm::mat4 proj = glm::perspective(glm::radians(70.f),aspect,0.5f,200000.f);
         glm::mat4 view = chaseView(tel);
 
         // Redireciona render para FBO HDR (bloom será aplicado depois)
@@ -499,7 +583,7 @@ int main(){
         // Far (zoom 13) com polygon offset positivo → empurra levemente para trás no
         // depth buffer, prevenindo z-fighting com closeTiles sem deslocar a geometria.
         glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(1.f, 50.f);
+        glPolygonOffset(3.f, 200.f);   // empurra far tiles bem para trás — evita z-fight com close
         farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
         glDisable(GL_POLYGON_OFFSET_FILL);
 
@@ -510,7 +594,7 @@ int main(){
         airports.render(proj*view, acWorld, acMslM, day);
 
         // 3b. OSM: prédios, estradas, água
-        osm.render(proj*view, acWorld, day, (float)glfwGetTime());
+        // osm.render(proj*view, acWorld, day, (float)glfwGetTime()); // desligado temporariamente
 
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);

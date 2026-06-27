@@ -81,53 +81,25 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ROLAGEM — Rate demand / attitude hold  (sem limites de bank por ora)
+    // ROLAGEM — direto (FBW roll desligado)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
-        float ailCmd = 0.f;
-        _bankProt = false;
-
-        if (std::fabsf(inp.wheel) > ROLL_DEADBAND) {
-            float demRate = inp.wheel * gains.maxRollRateDegS;
-            float err     = demRate - st.rollRateDegS;
-            float derr    = (err - _prevRollErr) / dt;
-            _prevRollErr  = err;
-            ailCmd        = gains.rollKp * err + gains.rollKd * derr;
-            _targetBank   = st.rollDeg;
-        } else {
-            _prevRollErr = 0.f;
-            float err = _targetBank - st.rollDeg;
-            ailCmd    = gains.holdKp * err;
-        }
-
-        ailCmd = clamp1(ailCmd);
+        float ailCmd = clamp1(inp.wheel);
         out.aileronL =  ailCmd;
         out.aileronR = -ailCmd;
         out.spoilerL = 0.f;
         out.spoilerR = 0.f;
+        _prevRollErr = 0.f;
+        _bankProt    = false;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // GUINADA — Auto-rudder (beta → 0) + pedais + yaw damper
-    // Convenção: out.rudder > 0 = guinada para direita (FDM negará ao escrever)
+    // GUINADA — direto (auto-rudder e yaw damper desligados)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
-        if (st.wow) {
-            out.rudder       = clamp1(inp.pedals);
-            out.steerNoseDeg = inp.pedals * MAX_STEER_DEG;
-        } else {
-            // Auto-rudder: anula beta proporcional (coordenação de curva)
-            // beta > 0 (deslize para direita) → guinada para direita (+rudder)
-            float autoRudder = gains.betaKp * st.betaDeg;
-
-            // Yaw damper washout (filtro passa-alta ~1 Hz): amortece Dutch roll
-            float ydDeriv    = st.yawRateDegS - _prevYawRate;
-            _prevYawRate     = st.yawRateDegS;
-            float ydCorrect  = -gains.yawDamperK * ydDeriv;
-
-            out.rudder       = clamp1(inp.pedals * 0.5f + autoRudder + ydCorrect);
-            out.steerNoseDeg = 0.f;
-        }
+        out.rudder       = clamp1(inp.pedals);
+        out.steerNoseDeg = inp.pedals * MAX_STEER_DEG;
+        _prevYawRate     = st.yawRateDegS;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

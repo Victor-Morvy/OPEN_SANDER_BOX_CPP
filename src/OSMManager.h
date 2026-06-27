@@ -38,7 +38,8 @@ private:
         MeshType type;
         glm::vec3 flatColor{1,1,1};
         int      facadeVariant=0;
-        float    baseY=0.f;      // terrain elevation at centroid (added in shader)
+        float    baseY=0.f;          // terrain elevation at centroid (added in shader)
+        glm::vec2 centroidXZ{0,0};   // world XZ for elevation re-sampling
     };
 
     // ── CPU raw mesh (built on bg thread, no GL calls) ────────────────────────

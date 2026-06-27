@@ -147,13 +147,8 @@ bool AcModel::loadMesh(const std::string& objPath, std::vector<AcMesh>& out) {
         AcMesh m;
         m.matIdx = g.mat;
         m.count  = (int)g.idx.size();
-        // Textura: usa map_Kd do MTL se disponível, senão recorre ao TEX_MAP fixo
-        if (!g.texFile.empty()) {
-            m.texId = loadTex(g.texFile);
-        } else {
-            int mi = g.mat;
-            m.texId = loadTex((mi>=0 && mi<4) ? TEX_MAP[mi] : "Embraer195.png");
-        }
+        // Textura: usa map_Kd do MTL se disponível, senão sem textura (cor flat)
+        m.texId = g.texFile.empty() ? 0 : loadTex(g.texFile);
 
         glGenVertexArrays(1,&m.vao); glGenBuffers(1,&m.vbo); glGenBuffers(1,&m.ibo);
         glBindVertexArray(m.vao);

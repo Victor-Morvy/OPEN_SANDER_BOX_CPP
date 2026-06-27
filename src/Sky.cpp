@@ -68,8 +68,10 @@ void main() {
     sunCol += vec3(1.0, 0.85, 0.6) * corona;
     sky += sunCol;
 
-    // suaviza o lado inferior (abaixo do horizonte → preto rápido)
-    sky *= smoothstep(-0.15, 0.05, dir.y + 0.01);
+    // Abaixo do horizonte: neblina terrestre em vez de corte para preto
+    float groundT = smoothstep(0.0, -0.40, dir.y);
+    vec3 earthHaze = mix(vec3(0.008, 0.010, 0.018), vec3(0.52, 0.46, 0.34), uDay);
+    sky = mix(sky, earthHaze, groundT * 0.92);
 
     FragColor = vec4(sky, 1.0);
 }

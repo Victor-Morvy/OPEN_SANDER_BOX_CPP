@@ -154,11 +154,12 @@ class ObjWriter:
         self.verts   = []
         self.uvs     = []
         self.normals = []
-        self.groups  = {}
+        self.groups  = {}   # key: (mat_idx, tex_name)
 
-    def add_group(self, mat_idx):
-        if mat_idx not in self.groups:
-            self.groups[mat_idx] = []
+    def add_group(self, mat_idx, tex_name=""):
+        key = (mat_idx, tex_name)
+        if key not in self.groups:
+            self.groups[key] = []
 
     def flat_normal(self, pts):
         if len(pts) < 3: return (0, 1, 0)
@@ -168,9 +169,10 @@ class ObjWriter:
         l = math.sqrt(nx*nx + ny*ny + nz*nz)
         return (nx/l, ny/l, nz/l) if l > 1e-10 else (0, 1, 0)
 
-    def add_poly(self, mat_idx, world_pts, uvs, texrep):
+    def add_poly(self, mat_idx, tex_name, world_pts, uvs, texrep):
         if len(world_pts) < 3: return
-        self.add_group(mat_idx)
+        self.add_group(mat_idx, tex_name)
+        key = (mat_idx, tex_name)
         ni = len(self.normals)
         self.normals.append(self.flat_normal(world_pts))
         vi_list, vti_list = [], []
@@ -180,7 +182,7 @@ class ObjWriter:
             self.uvs.append((tu * texrep[0], (1.0 - tv) * texrep[1]))
             vi_list.append(vi); vti_list.append(vti)
         for t in range(1, len(vi_list) - 1):
-            self.groups[mat_idx].append([
+            self.groups[key].append([
                 (vi_list[0],   vti_list[0],   ni),
                 (vi_list[t],   vti_list[t],   ni),
                 (vi_list[t+1], vti_list[t+1], ni),
@@ -198,7 +200,8 @@ class ObjWriter:
 
 def _add_surfs(obj, xf, writer):
     """Add an object's surfaces (world-space) to writer. No recursion."""
-    texrep = obj.get("texrep", (1, 1))
+    texrep  = obj.get("texrep", (1, 1))
+    tex_name = obj.get("texture") or ""
     if not (obj["verts"] and obj["surfs"]): return
     world_verts = [transform_vertex(xf, v) for v in obj["verts"]]
     for surf in obj["surfs"]:
@@ -209,9 +212,9 @@ def _add_surfs(obj, xf, writer):
         if stype not in (0, 0x10): continue  # skip line strips
         pts = [world_verts[r[0]] for r in refs]
         uvs = [(r[1], r[2]) for r in refs]
-        writer.add_poly(surf["mat"], pts, uvs, texrep)
+        writer.add_poly(surf["mat"], tex_name, pts, uvs, texrep)
         if flags & 0x20:  # two-sided
-            writer.add_poly(surf["mat"], list(reversed(pts)), list(reversed(uvs)), texrep)
+            writer.add_poly(surf["mat"], tex_name, list(reversed(pts)), list(reversed(uvs)), texrep)
 
 def _flatten_subtree(obj, parent_xf, writer):
     """Flatten obj and all children into writer. Used for animated parts."""
@@ -275,6 +278,13 @@ def compute_axis(name, gl_verts):
 
 # ── OBJ export ────────────────────────────────────────────────────────────────
 
+def mat_group_name(mat_idx, tex_name):
+    """Generate a unique material name for each (mat_idx, tex_name) combination."""
+    if not tex_name:
+        return f"mat{mat_idx}"
+    safe = os.path.splitext(os.path.basename(tex_name))[0].replace(" ", "_")
+    return f"mat{mat_idx}_{safe}"
+
 def write_verts(f, writer):
     for x, y, z in writer.verts:
         gx, gy, gz = ac_to_gl(x, y, z)
@@ -287,9 +297,10 @@ def write_verts(f, writer):
         gnx, gny, gnz = ac_to_gl(nx, ny, nz)
         f.write(f"vn {gnx:.6f} {gny:.6f} {gnz:.6f}\n")
     f.write("\n")
-    for mat_idx in sorted(writer.groups.keys()):
-        f.write(f"usemtl mat{mat_idx}\n")
-        for tri in writer.groups[mat_idx]:
+    for (mat_idx, tex_name) in sorted(writer.groups.keys()):
+        mname = mat_group_name(mat_idx, tex_name)
+        f.write(f"usemtl {mname}\n")
+        for tri in writer.groups[(mat_idx, tex_name)]:
             refs = " ".join(f"{v+1}/{vt+1}/{vn+1}" for v, vt, vn in tri)
             f.write(f"f {refs}\n")
         f.write("\n")
@@ -298,14 +309,24 @@ def write_static_obj(writer, materials, obj_path):
     mtl_path = obj_path.replace(".obj", ".mtl")
     mtl_name = os.path.basename(mtl_path)
 
+    # Collect all unique (mat_idx, tex_name) groups used
+    seen_names = set()
     with open(mtl_path, "w") as f:
-        for i, mat in enumerate(materials):
-            f.write(f"newmtl mat{i}\n")
+        for (mat_idx, tex_name) in sorted(writer.groups.keys()):
+            mname = mat_group_name(mat_idx, tex_name)
+            if mname in seen_names:
+                continue
+            seen_names.add(mname)
+            mat = materials[mat_idx] if mat_idx < len(materials) else {}
+            f.write(f"newmtl {mname}\n")
             r, g, b = mat.get("rgb", (1,1,1))
             f.write(f"Kd {r:.4f} {g:.4f} {b:.4f}\n")
             ar, ag, ab = mat.get("amb", (0.2,0.2,0.2))
             f.write(f"Ka {ar:.4f} {ag:.4f} {ab:.4f}\n")
-            f.write(f"d {1.0 - mat.get('trans', 0.0):.4f}\n\n")
+            f.write(f"d {1.0 - mat.get('trans', 0.0):.4f}\n")
+            if tex_name:
+                f.write(f"map_Kd {tex_name}\n")
+            f.write("\n")
 
     with open(obj_path, "w") as f:
         f.write(f"mtllib {mtl_name}\n\n")

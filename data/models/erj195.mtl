@@ -1,20 +1,29 @@
-newmtl mat0
+newmtl mat0_ERJ-wing
 Kd 0.0000 0.0000 0.0000
 Ka 0.2000 0.2000 0.2000
 d 1.0000
+map_Kd ERJ-wing.png
 
-newmtl mat1
+newmtl mat1_ERJ-wing
 Kd 1.0000 1.0000 1.0000
 Ka 1.0000 1.0000 1.0000
 d 1.0000
+map_Kd ERJ-wing.png
+
+newmtl mat1_blank195
+Kd 1.0000 1.0000 1.0000
+Ka 1.0000 1.0000 1.0000
+d 1.0000
+map_Kd blank195.png
 
 newmtl mat2
 Kd 1.0000 0.0000 0.0000
 Ka 1.0000 0.2000 0.2000
 d 0.6820
 
-newmtl mat3
+newmtl mat3_blank195
 Kd 0.0000 0.0000 0.0000
 Ka 0.2000 0.2000 0.2000
 d 0.4080
+map_Kd blank195.png
 

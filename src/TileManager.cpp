@@ -68,10 +68,11 @@ void main() {
     }
     float diff = clamp(uSunDir.y * 0.6 + 0.4, 0.0, 1.0);
     col *= mix(0.08, diff, uDay);
-    // Fog baseado em distância do avião (reduzido para visibilidade maior)
+    // Neblina atmosférica: funde para a cor do horizonte do sky
+    // fc em espaço linear: pow(horizonte_sky, 2.2) p/ corresponder ao gamma aplicado abaixo
     float d   = length(vWorld.xz - uAcWorld.xz);
-    float fog = exp(-d * 0.000006);
-    vec3  fc  = mix(vec3(.05,.06,.08), vec3(.58,.66,.80), uDay);
+    float fog = exp(-d * 0.000010);
+    vec3  fc  = mix(vec3(.004,.005,.012), vec3(.21,.43,.74), uDay);
     col = mix(fc, col, clamp(fog, 0.0, 1.0));
     FragColor = vec4(pow(col, vec3(1.0/2.2)), 1.0);
 }

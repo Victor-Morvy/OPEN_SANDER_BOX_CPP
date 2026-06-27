@@ -502,12 +502,11 @@ int main(){
     // Módulos visuais
     Sky         sky; sky.init();
 
-    // LOD 2 níveis — mesmo raio do JS (9×9 zoom-13 = 44 km):
-    //   farTiles  : zoom 13, 9×9 × 4.9 km = 44 km, 32 quads/tile, Y−20 m (sem z-fight)
-    //   closeTiles: zoom 15, 7×7 × 1.2 km =  8 km, 64 quads/tile, Y normal
-    //   Close renderiza por cima: depth test elimina far onde close está presente.
+    // LOD 2 níveis:
+    //   farTiles  : zoom 13, 17×17 × 4.5 km ≈ 76 km diam (~38 km raio), Y−5 m (sem z-fight)
+    //   closeTiles: zoom 15,  9×9 × 1.2 km ≈ 10 km diam, Y normal
     TileManager farTiles, closeTiles;
-    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 4, 33, -5.0f); // −5 m: garante que far tiles fiquem sob close tiles mesmo com erro de resolução
+    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 8, 33, -5.0f); // 17×17 tiles = ~38 km raio
     closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 4, 65,  0.f); // referência de altitude
 
     Clouds clouds; clouds.init();

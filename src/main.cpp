@@ -19,6 +19,7 @@
 #include "Clouds.h"
 #include "AirportManager.h"
 #include "OSMManager.h"
+#include "AcModel.h"
 #include "PostFX.h"
 
 #include <cstdio>
@@ -35,6 +36,9 @@
 #ifndef SYSTEMS_PATH
 #  define SYSTEMS_PATH "systems"
 #endif
+#ifndef MODELS_PATH
+#  define MODELS_PATH "data/models"
+#endif
 
 static constexpr int    JSB_HZ    = 120;
 static constexpr double RAD2DEG   = 180.0 / 3.14159265358979;
@@ -44,7 +48,64 @@ static constexpr float  CTRL_RET  = 3.0f;
 
 // ── Shaders ───────────────────────────────────────────────────────────────────
 
-// Shader genérico colorido — usado para aeronave (linhas) e pontos de contato
+// Shader do modelo 3D E195 — pos/nrm/uv, textura + diffuse flat
+static const char* MODEL_VERT = R"glsl(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec2 aUV;
+out vec3 vNrm;
+out vec2 vUV;
+uniform mat4 uMVP;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNrm = aNrm;
+    vUV  = aUV;
+}
+)glsl";
+
+static const char* MODEL_FRAG = R"glsl(
+#version 330 core
+in vec3 vNrm; in vec2 vUV;
+out vec4 F;
+uniform sampler2D uTex;
+uniform int       uHasTex;
+uniform float     uAlpha;
+void main() {
+    vec3 sun = normalize(vec3(0.4, 1.0, 0.3));
+    float diff = max(dot(normalize(vNrm), sun), 0.0) * 0.6 + 0.4;
+    vec4 base = (uHasTex == 1) ? texture(uTex, vUV) : vec4(0.8, 0.82, 0.85, 1.0);
+    F = vec4(base.rgb * diff, base.a * uAlpha);
+}
+)glsl";
+
+// Shader de partes animadas — igual ao estático mas rotaciona em torno de pivot
+static const char* ANIM_VERT = R"glsl(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec2 aUV;
+out vec3 vNrm; out vec2 vUV;
+uniform mat4  uMVP;
+uniform vec3  uPivot;
+uniform vec3  uAxis;
+uniform float uAngle;
+vec3 rotAround(vec3 p) {
+    vec3 d = p - uPivot;
+    float c = cos(uAngle), s = sin(uAngle);
+    return uPivot + d*c + cross(uAxis,d)*s + uAxis*dot(uAxis,d)*(1.0-c);
+}
+void main() {
+    gl_Position = uMVP * vec4(rotAround(aPos), 1.0);
+    float c = cos(uAngle), s = sin(uAngle);
+    vNrm = aNrm*c + cross(uAxis,aNrm)*s + uAxis*dot(uAxis,aNrm)*(1.0-c);
+    vUV  = aUV;
+}
+)glsl";
+
+// ANIM_FRAG shares MODEL_FRAG — same texture/lighting logic (set below)
+
+// Shader genérico colorido — usado para pontos de contato
 static const char* COL_VERT = R"glsl(
 #version 330 core
 layout(location=0) in vec3 aPos;
@@ -406,25 +467,23 @@ int main(){
 
     PostFX postfx; postfx.init();
 
-    // Programa shader único (wireframe + pontos)
+    // Shader de pontos de contato (wireframe removido — modelo 3D substituiu)
     GLuint prog = makeProgram(COL_VERT, COL_FRAG);
     GLint uMVP     = glGetUniformLocation(prog,"uMVP");
     GLint uPtSize  = glGetUniformLocation(prog,"uPtSize");
     GLint uCircle  = glGetUniformLocation(prog,"uCircle");
 
-    // VAO do avião (static wireframe)
-    GLuint acVAO,acVBO,acEBO;
-    glGenVertexArrays(1,&acVAO); glGenBuffers(1,&acVBO); glGenBuffers(1,&acEBO);
-    glBindVertexArray(acVAO);
-      glBindBuffer(GL_ARRAY_BUFFER,acVBO);
-      glBufferData(GL_ARRAY_BUFFER,sizeof(AC_V),AC_V,GL_STATIC_DRAW);
-      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,acEBO);
-      glBufferData(GL_ELEMENT_ARRAY_BUFFER,sizeof(AC_I),AC_I,GL_STATIC_DRAW);
-      glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,6*sizeof(float),(void*)0);
-      glEnableVertexAttribArray(0);
-      glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,6*sizeof(float),(void*)(3*sizeof(float)));
-      glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
+    // Shader + modelo 3D E195
+    GLuint modelProg = makeProgram(MODEL_VERT, MODEL_FRAG);
+    GLuint animProg  = makeProgram(ANIM_VERT,  MODEL_FRAG);  // same frag shader
+    AcModel e195;
+    {
+        std::string objPath = std::string(MODELS_PATH) + "/erj195.obj";
+        if (!e195.load(objPath))
+            fprintf(stderr, "[main] E195 model failed to load from %s\n", objPath.c_str());
+    }
+    float gearAnimPos = 1.f;   // 1=extended, 0=retracted
+    static float fanAngle = 0.f;
 
     // VAO de pontos de contato (dinâmico — atualizado todo frame)
     // Formato: xyz rgb (6 floats por ponto)
@@ -484,6 +543,14 @@ int main(){
 
         double now=glfwGetTime();
         double dt=std::min(now-lastTime,0.10); lastTime=now;
+
+        // Gear animation (8 s transit)
+        {
+            float gearTarget = gGearDown ? 1.f : 0.f;
+            constexpr float GEAR_SPEED = 1.f/8.f;
+            if (gearAnimPos < gearTarget) gearAnimPos = std::min(gearTarget, gearAnimPos + GEAR_SPEED*(float)dt);
+            else                          gearAnimPos = std::max(gearTarget, gearAnimPos - GEAR_SPEED*(float)dt);
+        }
 
         // Hora / sol
         if(glfwGetKey(win,GLFW_KEY_T)==GLFW_PRESS) localHour=fmodf(localHour+0.02f,24.f);
@@ -622,24 +689,39 @@ int main(){
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);
 
-        // 4. Avião wireframe
-        // Ordem YXZ (igual ao Three.js): yaw → pitch → roll
-        // yaw negado porque JSBSim usa CW e OpenGL usa CCW ao redor de +Y
+        // 4. Modelo 3D E195
+        // Ordem YXZ: yaw → pitch → roll
         glm::mat4 acModel(1.f);
-        acModel=glm::rotate(acModel,-(float)tel.yaw,   glm::vec3(0,1,0));  // heading
-        acModel=glm::rotate(acModel, (float)tel.pitch, glm::vec3(1,0,0));  // nariz sobe
-        acModel=glm::rotate(acModel,-(float)tel.roll,  glm::vec3(0,0,1));  // asa direita desce
-        glm::mat4 mvp=proj*view*acModel;
-        glUseProgram(prog);
-        glUniformMatrix4fv(uMVP,1,GL_FALSE,glm::value_ptr(mvp));
-        glUniform1f(uPtSize,1.f);
-        glUniform1i(uCircle,0);
-        glBindVertexArray(acVAO);
-        glDrawElements(GL_LINES,AC_NI,GL_UNSIGNED_SHORT,nullptr);
-        glBindVertexArray(0);
+        acModel=glm::rotate(acModel,-(float)tel.yaw,   glm::vec3(0,1,0));
+        acModel=glm::rotate(acModel, (float)tel.pitch, glm::vec3(1,0,0));
+        acModel=glm::rotate(acModel,-(float)tel.roll,  glm::vec3(0,0,1));
+        glm::mat4 mvp = proj*view*acModel;
+        if (e195.ok()) {
+            // Fan speed: N1 0-100 → ~20 rad/s at full power (visual only)
+            fanAngle += (float)(tel.n1[0] / 100.0 * 20.0 * dt);
+            AcAnimState animState;
+            animState.aileronL = surfCmd.aileronL;
+            animState.aileronR = surfCmd.aileronR;
+            animState.elevL    = surfCmd.elevLH;
+            animState.elevR    = surfCmd.elevRH;
+            animState.rudder   = surfCmd.rudder;
+            animState.flaps    = axes.flaps;
+            animState.spoilerL = surfCmd.spoilerL;
+            animState.spoilerR = surfCmd.spoilerR;
+            animState.gearPos  = gearAnimPos;
+            animState.fanAngle = fanAngle;
+            e195.draw(modelProg, animProg, mvp, animState);
+        } else {
+            glUseProgram(prog);
+            glUniformMatrix4fv(uMVP,1,GL_FALSE,glm::value_ptr(mvp));
+            glUniform1f(uPtSize,1.f);
+            glUniform1i(uCircle,0);
+        }
 
         // 4. Pontos de contato (esferas grandes)
         if(!contacts.empty()){
+            glUseProgram(prog);
+            glUniformMatrix4fv(uMVP,1,GL_FALSE,glm::value_ptr(mvp));
             glUniform1f(uPtSize,12.f);
             glUniform1i(uCircle,1);
             glBindVertexArray(ptVAO);
@@ -906,9 +988,9 @@ int main(){
 
     sky.cleanup(); farTiles.cleanup(); closeTiles.cleanup();
     clouds.cleanup(); airports.cleanup(); osm.cleanup(); postfx.cleanup();
-    glDeleteVertexArrays(1,&acVAO); glDeleteBuffers(1,&acVBO); glDeleteBuffers(1,&acEBO);
+    e195.cleanup();
     glDeleteVertexArrays(1,&ptVAO); glDeleteBuffers(1,&ptVBO);
-    glDeleteProgram(prog);
+    glDeleteProgram(prog); glDeleteProgram(modelProg); glDeleteProgram(animProg);
     ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     glfwDestroyWindow(win); glfwTerminate();

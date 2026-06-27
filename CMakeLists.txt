@@ -32,7 +32,8 @@ set(DATA_ROOT "${CMAKE_SOURCE_DIR}/data")
 file(TO_CMAKE_PATH "${DATA_ROOT}/aircraft"  _AC_PATH)
 file(TO_CMAKE_PATH "${DATA_ROOT}/engine"    _EN_PATH)
 file(TO_CMAKE_PATH "${DATA_ROOT}"           _SY_PATH)   # JSBSim procura data/systems/
-file(TO_CMAKE_PATH "${DATA_ROOT}/nav"       _DATA_PATH) # airports.csv, runways.csv
+file(TO_CMAKE_PATH "${DATA_ROOT}/nav"       _DATA_PATH)   # airports.csv, runways.csv
+file(TO_CMAKE_PATH "${DATA_ROOT}/models"   _MODELS_PATH) # erj195.obj, textures
 
 # ── Executável ───────────────────────────────────────────────────────────────
 add_executable(webflight
@@ -45,6 +46,7 @@ add_executable(webflight
   src/Clouds.cpp
   src/AirportManager.cpp
   src/OSMManager.cpp
+  src/AcModel.cpp
   src/PostFX.cpp
 )
 
@@ -55,6 +57,7 @@ target_compile_definitions(webflight PRIVATE
   ENGINE_PATH="${_EN_PATH}"
   SYSTEMS_PATH="${_SY_PATH}"
   DATA_PATH="${_DATA_PATH}"
+  MODELS_PATH="${_MODELS_PATH}"
 )
 
 target_link_libraries(webflight PRIVATE

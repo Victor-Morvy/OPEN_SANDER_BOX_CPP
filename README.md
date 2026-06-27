@@ -1,41 +1,36 @@
 # WebFlight C++ Simulator
 
-Simulador de voo nativo em C++ com física real (JSBSim), gráficos OpenGL e aeronave padrão **Embraer E195-E2** com FBW Normal Law.
+Simulador de voo nativo em C++ com física real (JSBSim), gráficos OpenGL 3.3 e aeronave padrão **Embraer E195-E2** com FBW Normal Law. Porte do simulador WebFlight (Node.js / Three.js / JSBSim-WASM) para aplicação nativa.
 
 ---
 
 ## Stack
 
-| Camada | Biblioteca | vcpkg name |
-|--------|-----------|------------|
+| Camada | Biblioteca | vcpkg |
+|--------|-----------|-------|
 | Janela + input | GLFW 3 | `glfw3` |
 | OpenGL loader | GLAD | `glad` |
-| Math (vetores/matrizes) | GLM | `glm` |
+| Math | GLM | `glm` |
 | UI (HUD + menus) | Dear ImGui | `imgui` |
-| HTTP (tiles de terreno) | libcurl | `curl` |
-| Decode de imagens | stb (stb_image) | `stb` |
-| Física (FDM) | JSBSim | via FetchContent (GitHub) |
+| HTTP (tiles, OSM) | libcurl | `curl` |
+| Decode de imagens | stb_image | `stb` |
+| JSON (OSM) | nlohmann/json | `nlohmann-json` |
+| Física (FDM) | JSBSim | FetchContent (GitHub) |
 
-> JSBSim é baixado e compilado automaticamente pelo CMake via `FetchContent` — **não precisa de vcpkg** para ele.
+> JSBSim é baixado e compilado automaticamente pelo CMake — não precisa de vcpkg para ele.
 
 ---
 
 ## Pré-requisitos
 
 - **CMake** ≥ 3.20
-- **Visual Studio 2022** (MSVC) ou equivalente com suporte a C++17
-- **vcpkg** instalado e integrado ao CMake (`-DCMAKE_TOOLCHAIN_FILE=...`)
+- **Visual Studio 2022** (MSVC) com C++17
+- **vcpkg** instalado
 
-### Instalar dependências via vcpkg
-
-```bash
-vcpkg install glfw3 glad glm imgui curl stb
-```
-
-Se usar o triplet x64-windows (recomendado):
+### Dependências via vcpkg
 
 ```bash
-vcpkg install glfw3:x64-windows glad:x64-windows glm:x64-windows imgui:x64-windows curl:x64-windows stb:x64-windows
+vcpkg install glfw3:x64-windows glad:x64-windows glm:x64-windows imgui:x64-windows curl:x64-windows stb:x64-windows nlohmann-json:x64-windows
 ```
 
 ---
@@ -43,36 +38,31 @@ vcpkg install glfw3:x64-windows glad:x64-windows glm:x64-windows imgui:x64-windo
 ## Build
 
 ```bash
-# 1. Clone o repositório
-git clone <url> webflight-cpp
-cd webflight-cpp
+git clone git@github.com:Victor-Morvy/OPEN_SANDER_BOX_CPP.git
+cd OPEN_SANDER_BOX_CPP
 
-# 2. Configure — aponte para o toolchain do vcpkg
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake -B build -S . \
+  -DCMAKE_TOOLCHAIN_FILE="C:/Users/Victor/Documents/Repositories/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+  -DCMAKE_BUILD_TYPE=Release
 
-# 3. Compile (JSBSim será baixado automaticamente)
 cmake --build build --config Release --parallel
 ```
 
-O executável fica em `build/Release/webflight.exe`.
+Executável: `build/Release/webflight.exe`
 
 ---
 
-## Dados da aeronave (XMLs JSBSim)
+## Dados (self-contained)
 
-Os arquivos de aeronave **não estão neste repositório**. O CMakeLists.txt espera encontrá-los em `../newGame/public/` (lado a lado com o projeto Node.js):
+Todos os dados estão na pasta `data/` do repositório — não depende do projeto Node.js:
 
 ```
-../newGame/public/
-├── aircraft/E195/        ← modelo E195-E2 (FDM XML, flight-control.xml)
-├── engine/               ← GE CF34-10E-L.xml, GE CF34-10E-R.xml
-└── data/                 ← airports.csv, runways.csv
-```
-
-Se quiser rodar de forma independente, copie esses diretórios para `data/` e ajuste os paths no `CMakeLists.txt`:
-
-```cmake
-set(AC_ROOT "${CMAKE_SOURCE_DIR}/data")
+data/
+├── aircraft/        — XMLs JSBSim (E195, C172P, DC3, MD11, ...)
+├── engine/          — GE CF34-10E, PT6A, Hamilton Standard, ...
+├── systems/         — GNCUtilities.xml
+├── nav/             — airports.csv, runways.csv
+└── models/          — c172p.glb (placeholder 3D)
 ```
 
 ---
@@ -80,64 +70,86 @@ set(AC_ROOT "${CMAKE_SOURCE_DIR}/data")
 ## Arquitetura
 
 ```
-main.cpp          — game loop (GLFW, ImGui, input, steps)
-FDM.cpp/.h        — wrapper JSBSim: init, step, telemetria, E195 FBW bridge
-FlyByWire.cpp/.h  — leis FBW: C* pitch, rate demand roll, yaw damper
-Sky.cpp/.h        — shader de céu Preetham/Hosek-Wilkie + bloom
-TileManager.cpp   — grid 9×9 de tiles de terreno (AWS Terrarium elevation + ESRI texture)
-Terrain.cpp/.h    — mesh de terreno (VBO dinâmico, LOD por faixas)
-Clouds.cpp/.h     — nuvens volumétricas (billboard instanced)
-AirportManager.cpp— CSV de aeroportos, luzes de pista, PAPI
-PostFX.cpp/.h     — framebuffer, bloom (UnrealBloom 2-pass), fog
+src/
+├── main.cpp            game loop, input, câmera chase, HUD ImGui
+├── FDM.cpp/.h          wrapper JSBSim: init, step, telemetria, E195 bridge
+├── FlyByWire.cpp/.h    lei FBW C* pitch (roll/yaw direto por ora)
+├── Sky.cpp/.h          shader Preetham/Hosek-Wilkie
+├── TileManager.cpp/.h  tiles AWS Terrarium (elevação) + ESRI (textura), 2 LOD
+├── Terrain.cpp/.h      mesh fallback checkerboard
+├── Clouds.cpp/.h       nuvens billboard instanced
+├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI
+├── OSMManager.cpp/.h   prédios + estradas via Overpass API (pausado)
+└── PostFX.cpp/.h       FBO, bloom 2-pass, fog
 ```
 
-### Loop de simulação
+### Sistema de coordenadas
+
+- **Render**: aircraft sempre na origem (0,0,0). Todos os objetos subtraem `acWorld` antes do VP transform.
+- **X** = Leste, **Y** = altitude AGL, **Z** = Sul (cauda)
+- `wpos.y` = AGL em metros; `acMslM = terrainElev_m + wpos.y`
+- Tiles LOD: zoom 13 (far, −5 m bias) + zoom 15 (close)
+
+### Terrain tiles
 
 ```
-Input (GLFW)
-    │ aileron / elevator / rudder / throttle / trim
-    ▼
-FlyByWire::update()      ← lei C* pitch, rate demand roll, yaw damper
-    │ SurfaceCmd (deflexões normalizadas)
-    ▼
-FDM::setControlsE195()   ← escreve /fadec/throttle-cmd, superfícies no JSBSim
-FDM::step()              ← FGFDMExec::Run() × N steps (JSB_HZ = 120 Hz)
-    │
-FDM::getTelemetry()      ← pitch, roll, yaw, CAS, N1/N2, alt AGL, ...
-    ▼
-GraphicsEngine::render() ← terreno, céu, aeronave wireframe, HUD ImGui
+TileManager farTiles  — zoom 13, 9×9 grid, yBias −5 m (sempre abaixo do close)
+TileManager closeTiles — zoom 15, 9×9 grid, referência de altitude
 ```
 
-### Throttle / FADEC
-
-O canal FADEC no `flight-control.xml` lê `/fadec/throttle-cmd[N]` (barra inicial obrigatória no SimGear). O bridge escreve via:
-
-```cpp
-_exec->SetPropertyValue("/fadec/throttle-cmd[0]", thrNorm);
-```
-
-Usar `GetPropertyManager()->GetNode("fadec/throttle-cmd[0]")` (sem barra) resolve para um nó diferente no SimGear e o canal FADEC lê zero — isso é o comportamento correto do SimGear, não um bug.
+Elevação: AWS Terrarium PNG → `R×256 + G + B/256 − 32768` metros MSL  
+Textura: ESRI World Imagery
 
 ### FBW Normal Law (E195-E2)
 
-| Eixo | Lei | Referência |
-|------|-----|-----------|
-| Pitch | C* = 0.8·q\_rad\_s + 0.2·Nz | Airbus/Embraer FBW típico |
-| Roll | Rate demand (PD) | Taxa de rolagem proporcional ao comando |
-| Yaw | Yaw damper (washout 1 Hz) | Suprime Dutch roll |
+| Eixo | Estado | Lei |
+|------|--------|-----|
+| Pitch | ativo | C\* = Nz + K·q, PID no erro |
+| Roll | direto | `aileron = inp.wheel` (FBW desligado) |
+| Yaw | direto | `rudder = inp.pedals` (damper desligado) |
 
 ---
 
-## Controles (teclado)
+## Controles
+
+### Teclado
 
 | Tecla | Ação |
 |-------|------|
-| `↑` / `↓` | Profundor (pitch) |
-| `←` / `→` | Aileron (roll) |
-| `A` / `D` | Leme (rudder) |
-| `W` / `S` | Throttle ±0.5/s |
+| `↑` / `↓` | Profundor |
+| `←` / `→` | Aileron |
+| `A` / `D` | Leme |
+| `W` / `S` | Throttle |
 | `B` | Freio |
-| `Num 8` / `Num 5` | Trim de pitch |
-| `P` | Pausa / menu de reposicionamento |
-| `Tab` | Alterna câmera (chase / cockpit) |
+| `F` / `V` | Flaps subir / descer |
+| `G` | Trem de pouso (toggle) |
+| `Num 8/5` | Trim pitch |
+| `Num 4/6` | Trim roll |
+| `T` / `Y` | Hora do dia ± |
+| `P` | Pausa |
 | `Esc` | Sair |
+
+### Joystick (gamepad Xbox / PS)
+
+| Eixo / Botão | Ação |
+|---|---|
+| Eixo 0 | Aileron |
+| Eixo 1 | Elevator |
+| Eixo 2 | Rudder |
+| Eixo 3 | Throttle (incremental) |
+| A / Cruz (0) | Freio |
+| X / □ (2) | Trem (toggle) |
+| LB / L1 (4) | Flaps subir |
+| RB / R1 (5) | Flaps descer |
+| Y / △ (3) | Reversor (pré-mapeado) |
+| Start (7) | Pausa |
+| D-pad ↑ / ↓ | Trim pitch picar / cabrar |
+| D-pad ← / → | Trim roll esq / dir |
+
+Mapeamento configurável via constantes `JS_AIL/ELV/THR/RDR` em `main.cpp`.
+
+---
+
+## Cache OSM
+
+Respostas Overpass salvas em `%LOCALAPPDATA%/webflight/osm_cache/` com TTL de 7 dias.

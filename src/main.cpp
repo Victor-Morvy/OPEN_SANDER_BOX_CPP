@@ -14,6 +14,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "FDM.h"
+#include "Autopilot.h"
 #include "Sky.h"
 #include "TileManager.h"
 #include "Clouds.h"
@@ -202,6 +203,8 @@ struct Axes {
     float trimElev=0, trimAil=0;
     bool gear=false;
     bool pauseBtn=false;
+    bool apBtn=false;     // Select — Attitude Hold
+    bool altBtn=false;    // Circle/B  — Altitude Hold
     bool reverser=false;
     // ── Câmera orbital (ângulos persistentes; L2+R2 para ajustar)
     float camYaw   = 0.f;    // 0=atrás, π=nariz; persiste ao soltar gatilhos
@@ -310,8 +313,10 @@ static bool readJoystick(Axes& a, float dt){
         if(B(13)) a.trimAil  = std::max(-1.f, a.trimAil  - JT*dt); // ← = roll esq
         if(B(11)) a.trimAil  = std::min( 1.f, a.trimAil  + JT*dt); // → = roll dir
 
-        // ── Start = pausa ─────────────────────────────────────────────────────
+        // ── Start = pausa | Select = ATT | Circle/B = ALT ────────────────────
         a.pauseBtn = B(7);
+        a.apBtn    = B(6);
+        a.altBtn   = B(1);
 
         // ── Y/△ = reversor ────────────────────────────────────────────────────
         a.reverser = B(3);
@@ -570,6 +575,7 @@ int main(){
     // FDM — E195 com FBW
     FDM        fdm;
     FlyByWire  fbw;
+    Autopilot  ap;
     FlyByWire::SurfaceCmd surfCmd;
 
     // Condições iniciais para o E195 (voo de cruzeiro ~3500ft, 200 kt)
@@ -639,6 +645,33 @@ int main(){
             e1Prev = e1Now; e2Prev = e2Now;
         }
 
+        // ── Autopilot (Z/Select = ATT hold | H/Circle = ALT hold) ───────────
+        if (fdmOk && !paused) {
+            static bool zPrev = false, hPrev = false;
+
+            bool zNow = glfwGetKey(win, GLFW_KEY_Z) == GLFW_PRESS || axes.apBtn;
+            if (zNow && !zPrev) {
+                if (ap.mode == Autopilot::Mode::AttitudeHold) {
+                    ap.disengage();
+                } else {
+                    FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
+                    ap.engage(acStAp, fbw);
+                }
+            }
+            zPrev = zNow;
+
+            bool hNow = glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS || axes.altBtn;
+            if (hNow && !hPrev) {
+                if (ap.mode == Autopilot::Mode::AltitudeHold) {
+                    ap.disengage();
+                } else {
+                    FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
+                    ap.engageAlt(acStAp, fbw);
+                }
+            }
+            hPrev = hNow;
+        }
+
         // ── Toggle de pausa (P) ────────────────────────────────────────────────
         {
             bool pNow = glfwGetKey(win, GLFW_KEY_P) == GLFW_PRESS || axes.pauseBtn;
@@ -699,6 +732,9 @@ int main(){
 
             // 2. Lê estado atual do JSBSim → FBW
             FlyByWire::AircraftState acSt = fdm.getStateForFBW();
+
+            // 2.5. Autopilot: modifica inp antes do FBW (desengaja se piloto intervir)
+            ap.update((float)dt, acSt, inp, fbw);
 
             // 3. Roda as leis FBW → comandos de superfície
             fbw.update((float)dt, inp, acSt, surfCmd);
@@ -873,6 +909,20 @@ int main(){
         ImGui::Text("HDG  %5.0f°", fmod(tel.yaw*RAD2DEG+360.0,360.0));
         ImGui::Text("PCH  %+5.1f°   ROL %+5.1f°",
                     tel.pitch*RAD2DEG, tel.roll*RAD2DEG);
+
+        // ── Autopilot status
+        if (ap.mode == Autopilot::Mode::AltitudeHold) {
+            ImGui::TextColored({.2f,.8f,1.f,1.f},
+                "AP ALT  %5.0f ft  PCH%+.1f°",
+                ap.targetAltFt, ap.targetPitchDeg);
+        } else if (ap.mode == Autopilot::Mode::AttitudeHold) {
+            ImGui::TextColored({.2f,1.f,.4f,1.f},
+                "AP ATT  PCH%+.1f°  ROL%+.1f°",
+                ap.targetPitchDeg, ap.targetBankDeg);
+        } else {
+            ImGui::TextColored({.5f,.5f,.5f,1.f},
+                "AP OFF   Z=ATT  H=ALT");
+        }
 
         ImGui::Separator();
 

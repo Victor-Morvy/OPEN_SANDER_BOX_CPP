@@ -41,6 +41,8 @@ public:
         float casKt         = 0.f;    // velocidade calibrada [kt]
         float mach          = 0.f;
         float altAgl        = 0.f;    // altitude AGL [ft] — usado por pitch envelope / TSA
+        float altBaro       = 0.f;    // altitude barométrica MSL [ft]
+        float vsFpm         = 0.f;    // velocidade vertical [ft/min] + = subindo
         bool  wow           = false;   // weight on wheels (main gear)
     };
 
@@ -100,6 +102,9 @@ public:
     float targetBank()  const { return _targetBank; }
     bool  alphaFloorActive() const { return _alphaFloor; }
     bool  bankProtActive()   const { return _bankProt; }
+
+    // Permite ao autopiloto definir o banco-alvo diretamente
+    void setTargetBank(float deg) { _targetBank = deg; }
 
 private:
     static constexpr float DEG2RAD = 3.14159265f / 180.f;

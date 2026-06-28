@@ -506,7 +506,7 @@ int main(){
     //   farTiles  : zoom 13, 17×17 × 4.5 km ≈ 76 km diam (~38 km raio), Y−5 m (sem z-fight)
     //   closeTiles: zoom 15,  9×9 × 1.2 km ≈ 10 km diam, Y normal
     TileManager farTiles, closeTiles;
-    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 8, 33, -5.0f); // 17×17 tiles = ~38 km raio
+    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 8, 33, -0.2f); // 17×17 tiles = ~38 km raio
     closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 4, 65,  0.f); // referência de altitude
 
     Clouds clouds; clouds.init();
@@ -753,7 +753,7 @@ int main(){
         // Far (zoom 13) com polygon offset positivo → empurra levemente para trás no
         // depth buffer, prevenindo z-fighting com closeTiles sem deslocar a geometria.
         glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(3.f, 200.f);   // empurra far tiles bem para trás — evita z-fight com close
+        glPolygonOffset(1.f, 50.f);    // empurra far tiles levemente — evita z-fight com close
         farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
         glDisable(GL_POLYGON_OFFSET_FILL);
 

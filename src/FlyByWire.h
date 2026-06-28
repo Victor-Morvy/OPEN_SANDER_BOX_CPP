@@ -25,6 +25,7 @@ public:
         float flaps     = 0.f;        // deflexão [0..1] → 7 passos (0=clean)
         float brake     = 0.f;        // freios [0..1]
         bool  gearCmd   = false;      // comando de trem (true=baixar)
+        bool  reverser  = false;      // reversor ativo (botão Y)
     };
 
     // ── Estado da aeronave (lido do FDM a cada passo) ────────────────────────
@@ -39,6 +40,7 @@ public:
         float betaDeg       = 0.f;    // ângulo de derrapagem lateral [°] — + = deslize para direita
         float casKt         = 0.f;    // velocidade calibrada [kt]
         float mach          = 0.f;
+        float altAgl        = 0.f;    // altitude AGL [ft] — usado por pitch envelope / TSA
         bool  wow           = false;   // weight on wheels (main gear)
     };
 
@@ -58,6 +60,7 @@ public:
         float brakeR        = 0.f;
         float steerNoseDeg  = 0.f;    // fcs/steer-nose-deg[0]
         bool  gearDown      = false;  // gear/unit[N]/pos-norm → 1.0
+        bool  reverser      = false;  // propulsion/engine[N]/reverser-angle-rad → π
     };
 
     // ── Parâmetros tuneáveis (expostos para autopiloto / calibrador) ──────────
@@ -70,14 +73,14 @@ public:
         float maxDemand = 1.5f;   // Nz demand máximo (acima/abaixo de 1g)
 
         // Rate demand / attitude hold (rolagem)
-        float rollKp         = 0.55f;
-        float rollKd         = 0.09f;
-        float holdKp         = 0.04f; // ganho reduzido para attitude hold
-        float maxRollRateDegS= 22.f;  // taxa de rolagem máxima comandada
+        // Sem derivativo: drateErr/dt amplifica ruído do sinal de phidot do JSBSim
+        float rollKp         = 0.12f;  // P na taxa de rolagem (era 0.55 — saturava)
+        float holdKp         = 0.03f;  // P para attitude hold (ganho do loop externo)
+        float maxRollRateDegS= 22.f;   // taxa de rolagem máxima comandada
 
         // Yaw damper + auto-rudder (coordenação de curva)
-        float yawDamperK = 0.40f;  // ganho de amortecimento
-        float betaKp     = 0.10f;  // ganho proporcional de correção de beta
+        float yawDamperK = 0.06f;  // era 0.40 — 2.5°/s já mandava rudder cheio
+        float betaKp     = 0.02f;  // correção de beta reduzida (sinal ruidoso)
     } gains;
 
     // ── Interface principal ───────────────────────────────────────────────────

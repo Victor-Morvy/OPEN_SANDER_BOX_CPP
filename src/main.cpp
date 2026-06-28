@@ -683,6 +683,7 @@ int main(){
             inp.flaps       = axes.flaps;
             inp.brake       = axes.brk;
             inp.gearCmd     = axes.gear;
+            inp.reverser    = axes.reverser;
 
             // 2. Lê estado atual do JSBSim → FBW
             FlyByWire::AircraftState acSt = fdm.getStateForFBW();

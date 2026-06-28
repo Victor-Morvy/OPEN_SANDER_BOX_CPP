@@ -241,11 +241,16 @@ void FDM::setControlsE195(const FlyByWire::SurfaceCmd& cmd)
     setD("fcs/rudder-master",        clamp1(-cmd.rudder));
     setD("controls/flight/rudder",   clamp1(-cmd.rudder));
 
-    // Throttle — mesmo padrão do deleteme: SetPropertyValue com barra inicial
+    // Throttle + reversor
+    // reverser-angle-rad = π ativa a cascata de reverso no JSBSim E195;
+    // o throttle-cmd controla a magnitude do empuxo reverso normalmente.
     double thr0 = clamp01(cmd.throttle[0]);
     double thr1 = clamp01(cmd.throttle[1]);
     _exec->SetPropertyValue("/fadec/throttle-cmd[0]", thr0);
     _exec->SetPropertyValue("/fadec/throttle-cmd[1]", thr1);
+    const double revAngle = cmd.reverser ? M_PI : 0.0;
+    _exec->SetPropertyValue("propulsion/engine[0]/reverser-angle-rad", revAngle);
+    _exec->SetPropertyValue("propulsion/engine[1]/reverser-angle-rad", revAngle);
 
     // Spoilers laterais (MFS 1-3 esquerda, 8-10 direita)
     double sL = clamp01(cmd.spoilerL);
@@ -307,6 +312,7 @@ FlyByWire::AircraftState FDM::getStateForFBW() const
     st.betaDeg       = (float)(getD("aero/beta-rad") / DEG2RAD);
     st.casKt         = (float)getD("velocities/vc-kts");
     st.mach          = (float)getD("velocities/mach");
+    st.altAgl        = (float)getD("position/h-agl-ft");
     st.wow           = (getD("gear/unit[1]/WOW") > 0.5) ||
                        (getD("gear/unit[2]/WOW") > 0.5);
     return st;

@@ -27,6 +27,9 @@
     <n2spinup>          1.845</n2spinup>
     <n1startrate>       0.503</n1startrate>
     <n2startrate>       1.127</n2startrate>
+    <n1spindown>        0.5</n1spindown>
+    <n2spindown>        0.5</n2spindown>
+    <disable-windmill> 1 </disable-windmill>
 
     <function name="IdleThrust">
         <product>

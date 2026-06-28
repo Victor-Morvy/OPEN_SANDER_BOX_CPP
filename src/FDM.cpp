@@ -222,6 +222,14 @@ bool FDM::initE195(const std::string& aircraftPath,
     return true;
 }
 
+// ── Controle de motores individuais ──────────────────────────────────────────
+
+void FDM::toggleEngineCutoff(int n)
+{
+    if (n < 0 || n >= 2) return;
+    _engCutoff[n] = !_engCutoff[n];
+}
+
 // ── E195: escrita de comandos no JSBSim ──────────────────────────────────────
 
 void FDM::setControlsE195(const FlyByWire::SurfaceCmd& cmd)
@@ -242,15 +250,32 @@ void FDM::setControlsE195(const FlyByWire::SurfaceCmd& cmd)
     setD("controls/flight/rudder",   clamp1(-cmd.rudder));
 
     // Throttle + reversor
-    // reverser-angle-rad = π ativa a cascata de reverso no JSBSim E195;
-    // o throttle-cmd controla a magnitude do empuxo reverso normalmente.
-    double thr0 = clamp01(cmd.throttle[0]);
-    double thr1 = clamp01(cmd.throttle[1]);
+    // Motor em cutoff recebe throttle 0 — mesmo padrão do E195-E2Sim linha 608:
+    // "Throttle only commands thrust while RUNNING; otherwise 0 (engine cut)."
+    double thr0 = _engCutoff[0] ? 0.0 : clamp01(cmd.throttle[0]);
+    double thr1 = _engCutoff[1] ? 0.0 : clamp01(cmd.throttle[1]);
     _exec->SetPropertyValue("/fadec/throttle-cmd[0]", thr0);
     _exec->SetPropertyValue("/fadec/throttle-cmd[1]", thr1);
     const double revAngle = cmd.reverser ? M_PI : 0.0;
     _exec->SetPropertyValue("propulsion/engine[0]/reverser-angle-rad", revAngle);
     _exec->SetPropertyValue("propulsion/engine[1]/reverser-angle-rad", revAngle);
+
+    // Cutoff por motor — mesmo padrão do flightdynamicsmodule.cpp do E195-E2Sim:
+    // usa FGTurbine::SetCutoff() diretamente (string property não funciona no CF34)
+    for (int n = 0; n < 2; ++n) {
+        auto* turb = dynamic_cast<JSBSim::FGTurbine*>(
+            _exec->GetPropulsion()->GetEngine(n).get());
+        if (!turb) continue;
+        if (_engCutoff[n]) {
+            turb->SetCutoff(true);
+        } else {
+            turb->SetCutoff(false);
+            if (!turb->GetRunning()) {
+                turb->SetRunning(true);
+                _exec->GetPropulsion()->InitRunning(n);
+            }
+        }
+    }
 
     // Spoilers laterais (MFS 1-3 esquerda, 8-10 direita)
     double sL = clamp01(cmd.spoilerL);
@@ -285,15 +310,17 @@ void FDM::setControlsE195(const FlyByWire::SurfaceCmd& cmd)
     setD("gear/unit[1]/pos-norm", gp);
     setD("gear/unit[2]/pos-norm", gp);
 
-    // Mantém motores ligados
+    // Mantém motores NÃO-cortados ligados (respeita _engCutoff[])
     auto prop = _exec->GetPropulsion();
     for (int i = 0; i < 2; ++i) {
+        if (_engCutoff[i]) continue;   // motor em cutoff: não interferir
         auto turb = std::dynamic_pointer_cast<JSBSim::FGTurbine>(prop->GetEngine(i));
         if (!turb) continue;
         turb->SetStarved(0);
-        turb->SetCutoff(false);
-        if (!prop->GetEngine(i)->GetRunning())
+        if (!prop->GetEngine(i)->GetRunning()) {
+            turb->SetCutoff(false);
             prop->InitRunning(i);
+        }
     }
 }
 
@@ -508,3 +535,18 @@ double FDM::getLatDeg()  const { if (!_exec) return 0.0; return _exec->GetPropag
 double FDM::getLonDeg()  const { if (!_exec) return 0.0; return _exec->GetPropagate()->GetLongitudeDeg(); }
 double FDM::getAltFt()   const { if (!_exec) return 0.0; return _exec->GetPropagate()->GetAltitudeASL(); }
 double FDM::getHdgDeg()  const { return _exec ? getD("attitude/psi-deg") : 0.0; }
+
+void FDM::setTemperatureAt(float tempC, double altFt)
+{
+    if (!_exec) return;
+    _exec->GetAtmosphere()->SetTemperature(
+        static_cast<double>(tempC), altFt, JSBSim::FGAtmosphere::eCelsius);
+}
+
+float FDM::getCurrentTempC() const
+{
+    if (!_exec) return 15.f;
+    double altFt = _exec->GetPropagate()->GetAltitudeASL();
+    double tempR = _exec->GetAtmosphere()->GetTemperature(altFt);
+    return static_cast<float>((tempR - 491.67) * 5.0 / 9.0);
+}

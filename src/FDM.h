@@ -82,6 +82,10 @@ public:
     // Lê estado do JSBSim → AircraftState para o FlyByWire
     FlyByWire::AircraftState getStateForFBW() const;
 
+    // ── Controle de motores individuais (OEI testing) ───────────────────────
+    void toggleEngineCutoff(int n);          // n=0 ou 1; toggle cutoff de combustível
+    bool engineCutoff(int n) const { return n >= 0 && n < 2 && _engCutoff[n]; }
+
     // ── Comum ────────────────────────────────────────────────────────────────
     void step();
     void setTerrainElevation(double ft);
@@ -113,6 +117,10 @@ public:
     double getAltFt()   const;
     double getHdgDeg()  const;
 
+    // ── Atmosfera ─────────────────────────────────────────────────────────────
+    void  setTemperatureAt(float tempC, double altFt); // temperatura real (°C) na altitude (ft)
+    float getCurrentTempC() const;                     // temperatura atual (°C) na altitude atual
+
     struct GearPoint {
         float rx, ry, rz;
         bool  wow;
@@ -129,6 +137,7 @@ private:
     // (restaurada no unpause para que mudança de heading não gere alpha extremo)
     double _pausedU = 0, _pausedV = 0, _pausedW = 0;
     double _pausedP = 0, _pausedQ = 0, _pausedR = 0;
+    bool   _engCutoff[2] = {false, false};
 
     double getD(const char* key) const;
     void   setD(const char* key, double val);

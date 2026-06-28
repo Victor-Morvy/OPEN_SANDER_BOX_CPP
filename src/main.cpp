@@ -597,6 +597,7 @@ int main(){
     bool paused = false;
     bool pPrev  = false;
     FDM::Reposition repoParams;   // editáveis na UI quando pausado
+    float pauseTempC = 15.f;      // temperatura a aplicar (°C) na altitude de repoParams
 
     printf("[Main] E195 FBW pronto.\n"
            "  ↑↓ profundor | ←→ aileron | A/D leme | W/S potência | B freio\n"
@@ -628,6 +629,16 @@ int main(){
         glm::vec3 sunDir = Sky::sunDirection(localHour);
         float     day    = Sky::dayFactor(sunDir);
 
+        // ── Toggle de motor individual (1=ENG1, 2=ENG2) ──────────────────────
+        if (fdmOk) {
+            static bool e1Prev=false, e2Prev=false;
+            bool e1Now = glfwGetKey(win, GLFW_KEY_1) == GLFW_PRESS;
+            bool e2Now = glfwGetKey(win, GLFW_KEY_2) == GLFW_PRESS;
+            if (e1Now && !e1Prev) fdm.toggleEngineCutoff(0);
+            if (e2Now && !e2Prev) fdm.toggleEngineCutoff(1);
+            e1Prev = e1Now; e2Prev = e2Now;
+        }
+
         // ── Toggle de pausa (P) ────────────────────────────────────────────────
         {
             bool pNow = glfwGetKey(win, GLFW_KEY_P) == GLFW_PRESS || axes.pauseBtn;
@@ -642,6 +653,7 @@ int main(){
                     repoParams.speedKcas  = (float)tel.cas;
                     repoParams.pitchDeg   = (float)(tel.pitch * RAD2DEG);
                     repoParams.rollDeg    = (float)(tel.roll  * RAD2DEG);
+                    pauseTempC = fdm.getCurrentTempC();
                     paused = true;
                 } else {
                     fdm.resume();
@@ -797,8 +809,9 @@ int main(){
                 animState.elevR    = surfCmd.elevRH;
                 animState.rudder   = surfCmd.rudder;
                 animState.flaps    = axes.flaps;
-                animState.spoilerL = surfCmd.spoilerL;
-                animState.spoilerR = surfCmd.spoilerR;
+                animState.spoilerL      = surfCmd.spoilerL;
+                animState.spoilerR      = surfCmd.spoilerR;
+                animState.groundSpoiler = surfCmd.groundSpoiler;
                 animState.gearPos  = gearAnimPos;
                 animState.fanAngle = fanAngle;
                 e195.draw(modelProg, animProg, mvp, animState);
@@ -864,9 +877,18 @@ int main(){
         ImGui::Separator();
 
         // ── Motores CF34
-        ImGui::Text("N1   L%4.1f%%  R%4.1f%%", tel.n1[0], tel.n1[1]);
-        ImGui::Text("N2   L%4.1f%%  R%4.1f%%", tel.n2[0], tel.n2[1]);
-        ImGui::Text("THR  %3.0f%%", axes.thr*100.f);
+        {
+            auto engColor = [&](int n) -> ImVec4 {
+                return fdm.engineCutoff(n) ? ImVec4{1.f,.2f,.2f,1.f}
+                                           : ImVec4{.3f,1.f,.4f,1.f};
+            };
+            ImGui::TextColored(engColor(0), "ENG1 N1%4.1f%% %s",
+                               tel.n1[0], fdm.engineCutoff(0)?"[CUT]":"[ON] ");
+            ImGui::TextColored(engColor(1), "ENG2 N1%4.1f%% %s",
+                               tel.n1[1], fdm.engineCutoff(1)?"[CUT]":"[ON] ");
+            ImGui::Text(       "N2   L%4.1f%%  R%4.1f%%", tel.n2[0], tel.n2[1]);
+            ImGui::Text(       "THR  %3.0f%%", axes.thr*100.f);
+        }
 
         ImGui::Separator();
 
@@ -990,9 +1012,9 @@ int main(){
 
         // ── Painel de Reposicionamento (visivel apenas quando pausado) ──────────
         if (paused && fdmOk) {
-            ImGui::SetNextWindowPos({(float)(fw/2 - 210), (float)(fh/2 - 190)},
+            ImGui::SetNextWindowPos({(float)(fw/2 - 210), (float)(fh/2 - 225)},
                                     ImGuiCond_Always);
-            ImGui::SetNextWindowSize({420, 380}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({420, 450}, ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(.92f);
             ImGui::Begin("##reposition", nullptr,
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1034,6 +1056,27 @@ int main(){
             ImGui::SetNextItemWidth(110.f);
             ImGui::InputFloat("##rol", &repoParams.rollDeg,  0.f, 0.f, "%.1f");
 
+            // ── Temperatura ───────────────────────────────────────────────────────
+            ImGui::Separator();
+            {
+                double altRef = repoParams.altFt;
+                double isaC   = altRef < 36089.0 ? 15.0 - 0.0019812 * altRef : -56.5;
+                ImGui::Text("Temperatura @ %.0f ft", altRef);
+                ImGui::SameLine(0.f, 8.f);
+                ImGui::TextDisabled("(ISA = %.1f°C)", (float)isaC);
+                ImGui::SetNextItemWidth(100.f);
+                ImGui::InputFloat("##temp", &pauseTempC, 0.f, 0.f, "%.1f");
+                ImGui::SameLine(0.f, 10.f);
+                float dev = pauseTempC - (float)isaC;
+                ImGui::TextColored(dev >= 0.f
+                    ? ImVec4{1.f, .70f, .25f, 1.f}
+                    : ImVec4{.4f, .85f, 1.0f, 1.f},
+                    "ISA%+.1f°C", dev);
+                ImGui::SameLine(0.f, 16.f);
+                if (ImGui::Button("Aplicar"))
+                    fdm.setTemperatureAt(pauseTempC, altRef);
+            }
+
             ImGui::Separator();
 
             ImGui::PushStyleColor(ImGuiCol_Button,        {.9f, .4f, .0f, 1.f});
@@ -1055,6 +1098,7 @@ int main(){
                 while (repoParams.headingDeg >= 360.0) repoParams.headingDeg -= 360.0;
 
                 fdm.repositionInPlace(repoParams);
+                fdm.setTemperatureAt(pauseTempC, repoParams.altFt);
                 fbw.reset();
                 // Reseta posicao render para nova altitude; X/Z voltam a 0
                 wpos = {0.0, repoParams.altFt * FT2M, 0.0};

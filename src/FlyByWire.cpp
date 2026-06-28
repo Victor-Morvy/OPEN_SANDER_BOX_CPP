@@ -80,22 +80,28 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             }
         }
 
-        _cstarDem = _cstarAct + columnMod * gains.maxDemand;
-        _alphaFloor = false;  // proteção desabilitada por ora
+        // Em terra: elevator neutro — C* sem sentido com aeronave parada no chão
+        if (st.wow) {
+            out.elevLH = out.elevRH = 0.f;
+            _elevInteg    = 0.f;
+            _prevPitchErr = 0.f;
+            _initialized  = false;  // reinicializa quando decolar
+        } else {
+            _cstarDem = _cstarAct + columnMod * gains.maxDemand;
+            _alphaFloor = false;
 
-        float err  = _cstarDem - _cstarAct;
-        _elevInteg += err * dt;
-        _elevInteg  = std::clamp(_elevInteg, -2.f, 2.f);  // clamp largo
+            float err  = _cstarDem - _cstarAct;
+            _elevInteg += err * dt;
+            _elevInteg  = std::clamp(_elevInteg, -2.f, 2.f);
 
-        float derr = (inp.column != 0.f) ? (err - _prevPitchErr) / dt : 0.f;
-        _prevPitchErr = err;
+            float derr = (inp.column != 0.f) ? (err - _prevPitchErr) / dt : 0.f;
+            _prevPitchErr = err;
 
-        // master negativo = cabrar (Cmde=-0.9: pos-rad neg → Cm positivo)
-        float elev = -(gains.pitchKp * err
-                     + gains.pitchKi * _elevInteg
-                     + gains.pitchKd * derr);
-
-        out.elevLH = out.elevRH = clamp1(elev);
+            float elev = -(gains.pitchKp * err
+                         + gains.pitchKi * _elevInteg
+                         + gains.pitchKd * derr);
+            out.elevLH = out.elevRH = clamp1(elev);
+        }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -152,9 +158,14 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     //  Steering do nariz usa apenas o sinal direto dos pedais (sem damper)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
-        float yawDamp  = -gains.yawDamperK * st.yawRateDegS;
-        float betaCorr =  gains.betaKp     * st.betaDeg;
-        out.rudder       = clamp1(inp.pedals + yawDamp + betaCorr);
+        if (st.wow) {
+            // No solo: pedais diretos — beta e yaw rate são ruidosos em baixa velocidade
+            out.rudder       = clamp1(inp.pedals);
+        } else {
+            float yawDamp  = -gains.yawDamperK * st.yawRateDegS;
+            float betaCorr =  gains.betaKp     * st.betaDeg;
+            out.rudder     = clamp1(inp.pedals + yawDamp + betaCorr);
+        }
         out.steerNoseDeg = inp.pedals * MAX_STEER_DEG;
         _prevYawRate     = st.yawRateDegS;
     }

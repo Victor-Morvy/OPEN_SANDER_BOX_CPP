@@ -13,9 +13,10 @@ struct AcAnimState {
     float elevR     = 0.f;
     float rudder    = 0.f;   // [-1..1]
     float flaps     = 0.f;   // [0..1]
-    float spoilerL  = 0.f;   // [0..1]
-    float spoilerR  = 0.f;
-    float gearPos   = 1.f;   // 1=extended, 0=retracted
+    float spoilerL      = 0.f;   // [0..1] — painéis externos (MFS roll/speed brake)
+    float spoilerR      = 0.f;
+    float groundSpoiler = 0.f;   // [0..1] — painéis internos (auto-deploy no toque)
+    float gearPos       = 1.f;   // 1=extended, 0=retracted
     float fanAngle  = 0.f;   // cumulative radians
 };
 

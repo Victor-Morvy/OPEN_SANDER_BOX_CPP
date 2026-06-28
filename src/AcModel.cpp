@@ -239,9 +239,11 @@ float AcModel::partAngle(const AcPart& p, const AcAnimState& s) const {
     if (name.size()>=4 && name.substr(0,4)=="flap")
         return s.flaps * mr * sgn;
 
-    // Spoilers [0..1]
-    if (name.size()>=10 && name.substr(0,10)=="spoiler.l") return s.spoilerL * mr * sgn;
-    if (name.size()>=10 && name.substr(0,10)=="spoiler.r") return s.spoilerR * mr * sgn;
+    // Spoilers — painéis externos (.2) = MFS roll/speed brake; internos (.1) = ground spoiler
+    if (name == "spoiler.l.2") return s.spoilerL      * mr * sgn;
+    if (name == "spoiler.r.2") return s.spoilerR      * mr * sgn;
+    if (name == "spoiler.l.1") return s.groundSpoiler * mr * sgn;
+    if (name == "spoiler.r.1") return s.groundSpoiler * mr * sgn;
 
     // Landing gear legs/tires — retract angle = (1−gearPos) × maxRad
     if (name=="gear.l"||name=="gear.r"||name=="gear.n"||

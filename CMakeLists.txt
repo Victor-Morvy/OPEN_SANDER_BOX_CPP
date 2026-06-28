@@ -40,7 +40,7 @@ add_executable(webflight
   src/main.cpp
   src/FDM.cpp
   src/FlyByWire.cpp
-  src/Autopilot.cpp
+  src/GuidanceModule.cpp
   src/Sky.cpp
   src/Terrain.cpp
   src/TileManager.cpp

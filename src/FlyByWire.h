@@ -43,6 +43,7 @@ public:
         float altAgl        = 0.f;    // altitude AGL [ft] — usado por pitch envelope / TSA
         float altBaro       = 0.f;    // altitude barométrica MSL [ft]
         float vsFpm         = 0.f;    // velocidade vertical [ft/min] + = subindo
+        float hdgDeg        = 0.f;    // proa verdadeira [°, 0=Norte, crescente CW]
         bool  wow           = false;   // weight on wheels (main gear)
     };
 

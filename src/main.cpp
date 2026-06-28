@@ -14,7 +14,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "FDM.h"
-#include "Autopilot.h"
+#include "GuidanceModule.h"
 #include "Sky.h"
 #include "TileManager.h"
 #include "Clouds.h"
@@ -573,9 +573,10 @@ int main(){
     glEnable(GL_DEPTH_TEST);
 
     // FDM — E195 com FBW
-    FDM        fdm;
-    FlyByWire  fbw;
-    Autopilot  ap;
+    FDM             fdm;
+    FlyByWire       fbw;
+    GuidanceModule  gm;
+    bool            guidancePanelOpen = false;
     FlyByWire::SurfaceCmd surfCmd;
 
     // Condições iniciais para o E195 (voo de cruzeiro ~3500ft, 200 kt)
@@ -645,31 +646,40 @@ int main(){
             e1Prev = e1Now; e2Prev = e2Now;
         }
 
-        // ── Autopilot (Z/Select = ATT hold | H/Circle = ALT hold) ───────────
-        if (fdmOk && !paused) {
-            static bool zPrev = false, hPrev = false;
+        // ── Guidance (Z/Select = ATT hold | H/Circle = ALT hold | F1 = painel) ─
+        {
+            static bool zPrev = false, hPrev = false, f1Prev = false;
 
-            bool zNow = glfwGetKey(win, GLFW_KEY_Z) == GLFW_PRESS || axes.apBtn;
-            if (zNow && !zPrev) {
-                if (ap.mode == Autopilot::Mode::AttitudeHold) {
-                    ap.disengage();
-                } else {
-                    FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
-                    ap.engage(acStAp, fbw);
-                }
-            }
-            zPrev = zNow;
+            // F1 — toggle painel AFCS (sempre disponível)
+            bool f1Now = glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS;
+            if (f1Now && !f1Prev) guidancePanelOpen = !guidancePanelOpen;
+            f1Prev = f1Now;
 
-            bool hNow = glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS || axes.altBtn;
-            if (hNow && !hPrev) {
-                if (ap.mode == Autopilot::Mode::AltitudeHold) {
-                    ap.disengage();
-                } else {
-                    FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
-                    ap.engageAlt(acStAp, fbw);
+            if (fdmOk && !paused) {
+                // Z / Select — toggle Attitude Hold
+                bool zNow = glfwGetKey(win, GLFW_KEY_Z) == GLFW_PRESS || axes.apBtn;
+                if (zNow && !zPrev) {
+                    if (gm.mode.vert == GuidanceModule::VertMode::AttitudeHold) {
+                        gm.disengageVert();
+                    } else {
+                        FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
+                        gm.engageAttitude(acStAp, fbw);
+                    }
                 }
+                zPrev = zNow;
+
+                // H / Circle — toggle Altitude Hold
+                bool hNow = glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS || axes.altBtn;
+                if (hNow && !hPrev) {
+                    if (gm.mode.vert == GuidanceModule::VertMode::AltitudeHold) {
+                        gm.disengageVert();
+                    } else {
+                        FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
+                        gm.engageAltitude(acStAp, fbw);
+                    }
+                }
+                hPrev = hNow;
             }
-            hPrev = hNow;
         }
 
         // ── Toggle de pausa (P) ────────────────────────────────────────────────
@@ -733,8 +743,13 @@ int main(){
             // 2. Lê estado atual do JSBSim → FBW
             FlyByWire::AircraftState acSt = fdm.getStateForFBW();
 
-            // 2.5. Autopilot: modifica inp antes do FBW (desengaja se piloto intervir)
-            ap.update((float)dt, acSt, inp, fbw);
+            // 2.5. GuidanceModule: modifica inp antes do FBW
+            GuidanceModule::Output gmOut;
+            gm.update((float)dt, acSt, inp, fbw, gmOut);
+            if (gmOut.overrideThrottle) {
+                inp.throttle[0] = gmOut.throttle[0];
+                inp.throttle[1] = gmOut.throttle[1];
+            }
 
             // 3. Roda as leis FBW → comandos de superfície
             fbw.update((float)dt, inp, acSt, surfCmd);
@@ -910,18 +925,29 @@ int main(){
         ImGui::Text("PCH  %+5.1f°   ROL %+5.1f°",
                     tel.pitch*RAD2DEG, tel.roll*RAD2DEG);
 
-        // ── Autopilot status
-        if (ap.mode == Autopilot::Mode::AltitudeHold) {
-            ImGui::TextColored({.2f,.8f,1.f,1.f},
-                "AP ALT  %5.0f ft  PCH%+.1f°",
-                ap.targetAltFt, ap.targetPitchDeg);
-        } else if (ap.mode == Autopilot::Mode::AttitudeHold) {
-            ImGui::TextColored({.2f,1.f,.4f,1.f},
-                "AP ATT  PCH%+.1f°  ROL%+.1f°",
-                ap.targetPitchDeg, ap.targetBankDeg);
-        } else {
-            ImGui::TextColored({.5f,.5f,.5f,1.f},
-                "AP OFF   Z=ATT  H=ALT");
+        // ── AFCS status
+        {
+            auto vm = gm.mode.vert;
+            auto lm = gm.mode.lat;
+            auto tm = gm.mode.thr;
+            if (vm == GuidanceModule::VertMode::AltitudeHold) {
+                ImGui::TextColored({.2f,.8f,1.f,1.f},
+                    "AP ALT  %5.0f ft  PCH%+.1f°",
+                    gm.targets.altFt, gm.targets.pitchDeg);
+            } else if (vm == GuidanceModule::VertMode::AttitudeHold) {
+                ImGui::TextColored({.2f,1.f,.4f,1.f},
+                    "AP ATT  PCH%+.1f°  ROL%+.1f°",
+                    gm.targets.pitchDeg, gm.targets.bankDeg);
+            } else {
+                ImGui::TextColored({.5f,.5f,.5f,1.f},
+                    "AP OFF   Z=ATT  H=ALT  F1=AFCS");
+            }
+            if (lm == GuidanceModule::LatMode::HeadingHold)
+                ImGui::TextColored({.9f,.7f,.2f,1.f},
+                    "HDG SEL  %03.0f°", gm.targets.headingDeg);
+            if (tm == GuidanceModule::ThrMode::SpeedHold)
+                ImGui::TextColored({.9f,.9f,.2f,1.f},
+                    "A/THR  %3.0f kt", gm.targets.speedKt);
         }
 
         ImGui::Separator();
@@ -1164,6 +1190,103 @@ int main(){
             ImGui::Separator();
             ImGui::TextDisabled("Edite os campos e clique TELEPORTAR para reposicionar.");
             ImGui::TextDisabled("Pressione P ou clique RETOMAR para continuar.");
+            ImGui::End();
+        }
+
+        // ── Painel AFCS Guidance (F1) ─────────────────────────────────────────
+        if (guidancePanelOpen && fdmOk) {
+            ImGui::SetNextWindowPos({(float)(fw/2 - 220), 10.f}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({440.f, 0.f}, ImGuiCond_Always);
+            ImGui::Begin("AFCS GUIDANCE", &guidancePanelOpen,
+                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoCollapse);
+
+            auto modeBtn = [](const char* label, bool active) -> bool {
+                if (active) ImGui::PushStyleColor(ImGuiCol_Button,{.1f,.7f,.2f,1.f});
+                bool clicked = ImGui::Button(label);
+                if (active) ImGui::PopStyleColor();
+                return clicked;
+            };
+
+            FlyByWire::AircraftState acStNow = fdm.getStateForFBW();
+
+            // ── Velocidade ─────────────────────────────────────────────────────
+            ImGui::Text("SPD");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(100.f);
+            ImGui::InputFloat("kt##spd", &gm.targets.speedKt, 1.f, 10.f, "%.0f");
+            ImGui::SameLine(200.f);
+            bool athrOn = gm.mode.thr == GuidanceModule::ThrMode::SpeedHold;
+            if (modeBtn(athrOn ? "A/THR ON##t" : "A/THR##t", athrOn)) {
+                if (athrOn) gm.disengageThrottle();
+                else        gm.engageSpeed(acStNow, axes.thr);
+            }
+
+            // ── Proa ───────────────────────────────────────────────────────────
+            ImGui::Text("HDG");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(100.f);
+            ImGui::InputFloat("°##hdg", &gm.targets.headingDeg, 1.f, 10.f, "%03.0f");
+            gm.targets.headingDeg = fmodf(gm.targets.headingDeg + 360.f, 360.f);
+            ImGui::SameLine(200.f);
+            bool hdgOn = gm.mode.lat == GuidanceModule::LatMode::HeadingHold;
+            if (modeBtn(hdgOn ? "HDG SEL ON##h" : "HDG SEL##h", hdgOn)) {
+                if (hdgOn) gm.disengageLat();
+                else       gm.engageHeading(acStNow);
+            }
+
+            // ── Altitude ───────────────────────────────────────────────────────
+            ImGui::Text("ALT");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(100.f);
+            ImGui::InputFloat("ft##alt", &gm.targets.altFt, 100.f, 1000.f, "%.0f");
+            ImGui::SameLine(200.f);
+            bool altOn = gm.mode.vert == GuidanceModule::VertMode::AltitudeHold;
+            if (modeBtn(altOn ? "ALT SEL ON##a" : "ALT SEL##a", altOn)) {
+                if (altOn) gm.disengageVert();
+                else       gm.engageAltitude(acStNow, fbw);
+            }
+
+            ImGui::Separator();
+
+            // ── Atitude (override FCU — não desengaja) ─────────────────────────
+            ImGui::Text("PCH");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(100.f);
+            float pch = gm.targets.pitchDeg;
+            if (ImGui::InputFloat("°##pch", &pch, 0.5f, 2.f, "%+.1f"))
+                gm.overridePitch(std::clamp(pch, -15.f, 15.f));
+            ImGui::SameLine(200.f);
+            ImGui::Text("ROL");
+            ImGui::SameLine(240.f);
+            ImGui::SetNextItemWidth(100.f);
+            float rol = gm.targets.bankDeg;
+            if (ImGui::InputFloat("°##rol", &rol, 1.f, 5.f, "%+.1f"))
+                gm.overrideBank(std::clamp(rol, -30.f, 30.f), fbw);
+
+            ImGui::SetNextItemWidth(200.f);
+            bool attOn = gm.mode.vert == GuidanceModule::VertMode::AttitudeHold;
+            ImGui::SetCursorPosX((440.f - 200.f) * 0.5f);
+            if (modeBtn(attOn ? "ATT HOLD ON##at" : "ATT HOLD##at", attOn)) {
+                if (attOn) gm.disengageVert();
+                else       gm.engageAttitude(acStNow, fbw);
+            }
+
+            ImGui::Separator();
+
+            // ── AP master ──────────────────────────────────────────────────────
+            ImGui::SetCursorPosX((440.f - 140.f) * 0.5f);
+            bool apOn = gm.isEngaged();
+            if (modeBtn(apOn ? "AP ON##ap" : "AP OFF##ap", apOn)) {
+                if (apOn) {
+                    gm.disengageVert();
+                    gm.disengageLat();
+                } else {
+                    gm.engageAttitude(acStNow, fbw);
+                }
+            }
+
+            ImGui::TextDisabled("F1 = fechar painel");
             ImGui::End();
         }
 

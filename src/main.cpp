@@ -976,6 +976,11 @@ int main(){
                 ImGui::TextColored({.2f,1.f,.4f,1.f},
                     "AP ATT  PCH%+.1f°  ROL%+.1f°",
                     gm.targets.pitchDeg, gm.targets.bankDeg);
+            } else if (vm == GuidanceModule::VertMode::Flch) {
+                ImGui::TextColored({1.f,.6f,.9f,1.f},
+                    "FLCH %s %5.0f ft @ %3.0f kt",
+                    (gm.targets.altFt > tel.altBaro) ? "CLB" : "DES",
+                    gm.targets.altFt, gm.targets.speedKt);
             } else {
                 ImGui::TextColored({.5f,.5f,.5f,1.f},
                     "AP OFF   Z=ATT  H=ALT  F1=AFCS");
@@ -983,6 +988,15 @@ int main(){
             if (lm == GuidanceModule::LatMode::HeadingHold)
                 ImGui::TextColored({.9f,.7f,.2f,1.f},
                     "HDG SEL  %03.0f°", gm.targets.headingDeg);
+            if (lm == GuidanceModule::LatMode::Nav) {
+                if (gm.activeWpt < (int)gm.fplan.size())
+                    ImGui::TextColored({.4f,.9f,1.f,1.f},
+                        "LNAV %s  BRG %03.0f°  %.1f NM",
+                        gm.fplan[gm.activeWpt].name.c_str(),
+                        gm.navBrgDeg, gm.navDistNm);
+                else
+                    ImGui::TextColored({.4f,.9f,1.f,1.f}, "LNAV  FIM DO PLANO");
+            }
             if (tm == GuidanceModule::ThrMode::SpeedHold)
                 ImGui::TextColored({.9f,.9f,.2f,1.f},
                     "A/THR  VMIN %3.0f kt", gm.targets.speedKt);
@@ -1291,6 +1305,43 @@ int main(){
                 else       gm.engageHeading(acStNow);
             }
 
+            // ── LNAV: flight plan por ICAO ─────────────────────────────────────
+            static char icaoBuf[8] = "";
+            ImGui::Text("WPT");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(64.f);
+            bool icaoEnter = ImGui::InputText("##icao", icaoBuf, sizeof(icaoBuf),
+                ImGuiInputTextFlags_CharsUppercase |
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SameLine();
+            if ((ImGui::SmallButton("ADD##wpt") || icaoEnter) && icaoBuf[0]) {
+                double wlat = 0, wlon = 0;
+                if (airports.findAirport(icaoBuf, wlat, wlon)) {
+                    gm.fplan.push_back({wlat, wlon, icaoBuf});
+                    icaoBuf[0] = 0;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("CLR##wpt")) {
+                gm.fplan.clear();
+                gm.activeWpt = 0;
+                if (gm.mode.lat == GuidanceModule::LatMode::Nav)
+                    gm.disengageLat();
+            }
+            ImGui::SameLine(200.f);
+            bool navOn = gm.mode.lat == GuidanceModule::LatMode::Nav;
+            if (modeBtn(navOn ? "LNAV ON##n" : "LNAV##n", navOn)) {
+                if (navOn)                  gm.disengageLat();
+                else if (!gm.fplan.empty()) gm.engageLNAV();
+            }
+            for (int i = 0; i < (int)gm.fplan.size(); i++) {
+                bool act = navOn && i == gm.activeWpt;
+                ImGui::TextColored(act ? ImVec4{.4f,.9f,1.f,1.f}
+                                       : ImVec4{.55f,.55f,.55f,1.f},
+                    act ? "   %d. %s  %.1f NM  <ATIVO>" : "   %d. %s",
+                    i + 1, gm.fplan[i].name.c_str(), gm.navDistNm);
+            }
+
             // ── Altitude ───────────────────────────────────────────────────────
             ImGui::Text("ALT");
             ImGui::SameLine(70.f);
@@ -1327,6 +1378,18 @@ int main(){
                     else if (gm.targets.vsFpm < 0.f && gm.athrEngaged())
                         gm.setBaseThrottle(std::min(gm.getBaseThrottle(), 0.40f));
                 }
+            }
+
+            // ── FLCH: muda de nível pela velocidade (ALT alvo @ SPD alvo) ──────
+            ImGui::Text("FLCH");
+            ImGui::SameLine(70.f);
+            ImGui::TextDisabled("→ %5.0f ft @ %3.0f kt",
+                                gm.targets.altFt, gm.targets.speedKt);
+            ImGui::SameLine(200.f);
+            bool flchOn = gm.mode.vert == GuidanceModule::VertMode::Flch;
+            if (modeBtn(flchOn ? "FLCH ON##f" : "FLCH##f", flchOn)) {
+                if (flchOn) gm.disengageVert();
+                else        gm.engageFlch(acStNow, fbw);
             }
 
             ImGui::Separator();

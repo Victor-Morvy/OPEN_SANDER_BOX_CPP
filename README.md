@@ -126,8 +126,10 @@ Textura: ESRI World Imagery
 
 | Modo | Lei |
 |------|-----|
-| ALT SEL | Cascata alt → VS (PI c/ anti-windup) → pitch; V/S manual configurável |
+| ALT SEL | Cascata alt → VS (PI c/ anti-windup por saturação) → pitch; V/S manual configurável |
+| FLCH | Muda de nível pela velocidade: throttle fixo (climb 92% / idle 8%), pitch segura o CAS alvo; captura → ALT HOLD e devolve o throttle ao A/THR |
 | HDG SEL | Erro de proa → bank demand (máx 25°) |
+| LNAV | Flight plan por ICAO (airports.csv); bearing ao waypoint ativo → heading; sequencia a 1.5 NM; fim do plano → HDG HOLD |
 | A/THR | PI bidirecional assimétrico — alvo é piso de velocidade (underspeed 2× mais forte) |
 | ATT | Mantém pitch/bank capturados; override pelo painel sem desengajar |
 

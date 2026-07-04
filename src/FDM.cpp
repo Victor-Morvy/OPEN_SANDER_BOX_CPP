@@ -343,6 +343,8 @@ FlyByWire::AircraftState FDM::getStateForFBW() const
     st.altBaro       = (float)getD("position/h-sl-ft");
     st.vsFpm         = (float)(-getD("velocities/v-down-fps") * 60.0);
     st.hdgDeg        = (float)fmod(getD("attitude/psi-deg") + 360.0, 360.0);
+    st.latDeg        = getD("position/lat-geod-deg");
+    st.lonDeg        = getD("position/long-gc-deg");
     st.wow           = (getD("gear/unit[1]/WOW") > 0.5) ||
                        (getD("gear/unit[2]/WOW") > 0.5);
     return st;

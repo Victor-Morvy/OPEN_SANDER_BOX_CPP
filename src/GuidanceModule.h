@@ -1,5 +1,7 @@
 #pragma once
 #include "FlyByWire.h"
+#include <vector>
+#include <string>
 
 // ── GuidanceModule ────────────────────────────────────────────────────────────
 //
@@ -16,8 +18,8 @@
 
 class GuidanceModule {
 public:
-    enum class LatMode  { Off, HeadingHold };
-    enum class VertMode { Off, AttitudeHold, AltitudeHold };
+    enum class LatMode  { Off, HeadingHold, Nav };
+    enum class VertMode { Off, AttitudeHold, AltitudeHold, Flch };
     enum class ThrMode  { Off, SpeedHold };
 
     struct ModeState {
@@ -44,6 +46,16 @@ public:
         bool  active   = false;
     } fd;
 
+    // ── LNAV: flight plan ─────────────────────────────────────────────────────
+    struct Waypoint {
+        double      lat = 0.0, lon = 0.0;
+        std::string name;       // ex: ident ICAO
+    };
+    std::vector<Waypoint> fplan;
+    int   activeWpt = 0;
+    float navDistNm = 0.f;      // distância ao waypoint ativo (leitura p/ HUD)
+    float navBrgDeg = 0.f;      // bearing ao waypoint ativo
+
     struct Output {
         float column           = 0.f;
         float wheel            = 0.f;
@@ -59,6 +71,8 @@ public:
     void engageAltitude(const FlyByWire::AircraftState& st, FlyByWire& fbw);
     void engageHeading (const FlyByWire::AircraftState& st);
     void engageSpeed   (const FlyByWire::AircraftState& st, float currentThrottle);
+    void engageLNAV    ();                                          // requer fplan
+    void engageFlch    (const FlyByWire::AircraftState& st, FlyByWire& fbw);
 
     void disengageVert();
     void disengageLat();
@@ -88,6 +102,8 @@ private:
 
     float _pitchInteg    = 0.f;
     float _vsInteg       = 0.f;  // integrador VS→pitch (pitch de trim da subida)
+    float _flchInteg     = 0.f;  // integrador FLCH: pitch de trim p/ manter CAS
+    float _flchThr       = 0.f;  // throttle fixo do FLCH (climb/idle)
     float _columnFilt    = 0.f;
     float _throttleInteg = 0.f;
     float _baseThrottle  = 0.f;

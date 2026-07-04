@@ -111,7 +111,20 @@ residual em regime. No solo: pedais diretos, integrador zerado.
 - **HeadingHold**: hdgErr → bank demand (KP=3.0, máx 25°) via fbw.setTargetBank.
 - **SpeedHold (A/THR)**: alvo é PISO de velocidade. PI bidirecional assimétrico:
   underspeed KP=0.025/KI=0.010, overspeed KP=0.015/KI=0.005 (integrador em
-  unidades de throttle, ±0.6) + boost de persistência a cada 1 s.
+  unidades de throttle, ±0.6) + boost de persistência a cada 1 s. ATENÇÃO:
+  engageSpeed() captura a velocidade ATUAL como alvo — setar targets.speedKt
+  DEPOIS do engage.
+- **FLCH**: throttle fixo (0.92 climb / 0.08 idle, suspende o SpeedHold), pitch
+  segura o CAS via PI (KP=0.15, KI=0.02). Captura a 250 ft → AltitudeHold e
+  re-inicializa o SpeedHold a partir do throttle do FLCH.
+- **LNAV**: fplan de waypoints (lat/lon/nome; painel adiciona por ICAO via
+  AirportManager::findAirport). Bearing plano (equiretangular) ao wpt ativo →
+  targets.headingDeg → mesma cascata do HeadingHold. Sequencia a 1.5 NM; fim do
+  plano → HeadingHold na proa atual.
+- **Anti-windup por SATURAÇÃO** (VS e FLCH): o integrador congela apenas quando
+  o pitch demandado saturou no mesmo sentido do erro. Congelar por magnitude do
+  erro causa deadlock (integrador preso em trim errado após captura) — testado
+  offline nos dois loops.
 - Pitch outer loop compartilhado: KP=0.022, KI=0.003, filtro COL_LP=0.70.
 - Auto-desconexão vert+lat com |column| ou |wheel| > 0.15.
 

@@ -32,6 +32,26 @@ void GuidanceModule::engageHeading(const FlyByWire::AircraftState& st)
     mode.lat = LatMode::HeadingHold;
 }
 
+void GuidanceModule::engageLNAV()
+{
+    if (fplan.empty()) return;
+    if (activeWpt >= (int)fplan.size()) activeWpt = 0;
+    mode.lat = LatMode::Nav;
+}
+
+void GuidanceModule::engageFlch(const FlyByWire::AircraftState& st, FlyByWire& fbw)
+{
+    // Alvo de altitude vem de targets.altFt (campo ALT do painel);
+    // alvo de velocidade vem de targets.speedKt (campo SPD do painel)
+    targets.bankDeg  = st.rollDeg;
+    targets.pitchDeg = st.pitchDeg;
+    _flchInteg       = st.pitchDeg;   // parte do pitch atual — engate sem degrau
+    _pitchInteg      = 0.f;
+    _columnFilt      = 0.f;
+    fbw.setTargetBank(targets.bankDeg);
+    mode.vert = VertMode::Flch;
+}
+
 void GuidanceModule::engageSpeed(const FlyByWire::AircraftState& st, float currentThrottle)
 {
     targets.speedKt  = st.casKt;
@@ -48,6 +68,7 @@ void GuidanceModule::disengageVert()
     mode.vert   = VertMode::Off;
     _pitchInteg = 0.f;
     _vsInteg    = 0.f;
+    _flchInteg  = 0.f;
 }
 
 void GuidanceModule::disengageLat()
@@ -83,8 +104,30 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         disengageLat();
     }
 
+    // ── LNAV: bearing ao waypoint ativo → heading target ─────────────────────
+    if (mode.lat == LatMode::Nav) {
+        if (activeWpt >= (int)fplan.size()) {
+            // Fim do plano: mantém a proa atual (vira HeadingHold)
+            targets.headingDeg = st.hdgDeg;
+            mode.lat = LatMode::HeadingHold;
+        } else {
+            constexpr double D2R = 3.14159265358979 / 180.0;
+            const Waypoint& w = fplan[activeWpt];
+            double dNorth = (w.lat - st.latDeg) * 60.0;                        // NM
+            double dEast  = (w.lon - st.lonDeg) * 60.0 * std::cos(st.latDeg * D2R);
+            navDistNm = (float)std::sqrt(dNorth*dNorth + dEast*dEast);
+            navBrgDeg = (float)std::fmod(std::atan2(dEast, dNorth) / D2R + 360.0, 360.0);
+
+            // Sequenciamento: dentro de 1.5 NM avança para o próximo waypoint
+            if (navDistNm < 1.5f)
+                activeWpt++;
+            else
+                targets.headingDeg = navBrgDeg;
+        }
+    }
+
     // ── Heading Hold: hdg_error → bank_demand → FBW attitude hold ───────────
-    if (mode.lat == LatMode::HeadingHold) {
+    if (mode.lat == LatMode::HeadingHold || mode.lat == LatMode::Nav) {
         constexpr float KP_HDG = 3.0f;
         float hdgErr = targets.headingDeg - st.hdgDeg;
         // normaliza para -180..+180
@@ -116,17 +159,58 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
 
         // PI no VS: P amortece, I acumula o pitch de trim necessário para
         // sustentar o VS demandado (P puro deixava ~30% de déficit: 543/800)
-        // Anti-windup: só integra quando rastreando (|erro| < 500 fpm) — se o VS
-        // demandado excede a performance, o erro persistente NÃO acumula pitch.
-        // Sem isso: windup a 12° na subida → puxada forte + oscilação na captura.
+        // Anti-windup POR SATURAÇÃO: congela o integrador apenas quando o pitch
+        // demandado já saturou no mesmo sentido do erro. (Congelar por magnitude
+        // do erro causava dois defeitos: windup mascarado na subida E deadlock
+        // após captura com o integrador preso no trim errado.)
         float vsErr = vsDemand - st.vsFpm;
-        if (std::abs(vsErr) < 500.f)
+        float rawUn = KP_VS * vsErr + _vsInteg;
+        if (std::abs(rawUn) < MAX_PITCH_AP || rawUn * vsErr < 0.f)
             _vsInteg += KI_VS * vsErr * dt;
         _vsInteg = std::clamp(_vsInteg, -6.f, 6.f);
         float rawPitch  = std::clamp(KP_VS * vsErr + _vsInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
         // Rate limiter: pitch target não pula — máximo PITCH_RATE °/s
         float delta     = std::clamp(rawPitch - targets.pitchDeg, -PITCH_RATE * dt, PITCH_RATE * dt);
         targets.pitchDeg += delta;
+    }
+
+    // ── FLCH: throttle fixo (climb/idle), pitch controla a velocidade ────────
+    if (mode.vert == VertMode::Flch) {
+        constexpr float FLCH_KP    = 0.15f;   // ° por kt de erro
+        constexpr float FLCH_KI    = 0.02f;   // °/s por kt (trim)
+        constexpr float PITCH_RATE = 3.0f;    // °/s máx no target
+
+        float altErr = targets.altFt - st.altBaro;
+        if (std::abs(altErr) < 250.f) {
+            // Captura: transição para Altitude Hold, devolve o throttle ao A/THR
+            mode.vert        = VertMode::AltitudeHold;
+            targets.vsManual = false;
+            _vsInteg         = st.pitchDeg;
+            if (mode.thr == ThrMode::SpeedHold) {
+                _baseThrottle  = _flchThr;   // retoma speed hold do throttle atual
+                _throttleInteg = 0.f;
+                _thrBoost      = 0.f;
+            }
+        } else {
+            bool climb = altErr > 0.f;
+            _flchThr = climb ? 0.92f : 0.08f;
+
+            // Speed-on-pitch: rápido → nariz sobe; lento → nariz desce
+            float spdErr = st.casKt - targets.speedKt;   // + = rápido demais
+            // Anti-windup por saturação: só congela quando o pitch demandado já
+            // saturou NO MESMO sentido do erro (congelar por erro grande deixava
+            // 27 kt de erro em regime — o integrador é mais necessário aí)
+            float rawUnclamped = FLCH_KP * spdErr + _flchInteg;
+            if (std::abs(rawUnclamped) < MAX_PITCH_AP || rawUnclamped * spdErr < 0.f)
+                _flchInteg += FLCH_KI * spdErr * dt;
+            _flchInteg = std::clamp(_flchInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
+
+            float rawPitch = std::clamp(FLCH_KP * spdErr + _flchInteg,
+                                        -MAX_PITCH_AP, MAX_PITCH_AP);
+            float delta = std::clamp(rawPitch - targets.pitchDeg,
+                                     -PITCH_RATE * dt, PITCH_RATE * dt);
+            targets.pitchDeg += delta;
+        }
     }
 
     // ── Loop externo de pitch (compartilhado att + alt) ──────────────────────
@@ -143,8 +227,8 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         inp.wheel      = 0.f;
     }
 
-    // ── Speed Hold (autothrottle) ─────────────────────────────────────────────
-    if (mode.thr == ThrMode::SpeedHold) {
+    // ── Speed Hold (autothrottle) — suspenso durante FLCH (throttle é fixo) ──
+    if (mode.thr == ThrMode::SpeedHold && mode.vert != VertMode::Flch) {
         constexpr float KP_SPD    = 0.025f;  // P underspeed [throttle/kt]
         constexpr float KP_OVR    = 0.015f;  // P overspeed — mais suave (piso é prioridade)
         constexpr float KI_SPD    = 0.010f;  // I underspeed [throttle/(kt·s)]
@@ -181,6 +265,13 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         thr              = std::clamp(thr, 0.f, 1.f);
         out.throttle[0]  = thr;
         out.throttle[1]  = thr;
+        out.overrideThrottle = true;
+    }
+
+    // ── FLCH: throttle fixo (climb power ou idle) ─────────────────────────────
+    if (mode.vert == VertMode::Flch) {
+        out.throttle[0]      = _flchThr;
+        out.throttle[1]      = _flchThr;
         out.overrideThrottle = true;
     }
 

@@ -518,6 +518,19 @@ void AirportManager::render(const glm::mat4& VP,
     glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
+// ── findAirport ───────────────────────────────────────────────────────────────
+
+bool AirportManager::findAirport(const std::string& ident,
+                                 double& lat, double& lon) const {
+    for (const auto& ap : _airports) {
+        if (ap.ident == ident) {
+            lat = ap.lat; lon = ap.lon;
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── cleanup ───────────────────────────────────────────────────────────────────
 
 void AirportManager::cleanup() {

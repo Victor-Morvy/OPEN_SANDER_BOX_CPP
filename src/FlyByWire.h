@@ -52,6 +52,8 @@ public:
         float altBaro       = 0.f;    // altitude barométrica MSL [ft]
         float vsFpm         = 0.f;    // velocidade vertical [ft/min] + = subindo
         float hdgDeg        = 0.f;    // proa verdadeira [°, 0=Norte, crescente CW]
+        double latDeg       = 0.0;    // latitude  [°] — usado pelo LNAV
+        double lonDeg       = 0.0;    // longitude [°] — usado pelo LNAV
         bool  wow           = false;   // weight on wheels (main gear)
     };
 

@@ -18,6 +18,9 @@ public:
     void render(const glm::mat4& VP,
                 const glm::vec3& acWorld, float acMslM, float day);
 
+    // Busca aeroporto por ident (ICAO, ex: "SBGL"). true = achou.
+    bool findAirport(const std::string& ident, double& lat, double& lon) const;
+
     void cleanup();
 
 private:

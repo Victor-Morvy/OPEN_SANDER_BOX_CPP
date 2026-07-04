@@ -240,6 +240,14 @@ Executável: `build/Release/webflight.exe`
 
 ## Pendências
 
+- **FBW Alternate Law (reversão)**: modo de reversão que remove TODAS as
+  proteções do Normal Law (alpha floor, bank protection, pitch envelope) e no
+  lugar adiciona:
+  - **Proteção de velocidade**: overspeed → puxa o nariz para cima; underspeed
+    → baixa o nariz (estabilidade de alta/baixa velocidade, sem hard limits)
+  - **Limites de pitch**: máx +30° pitch up, mín −15° pitch down
+  - Precisa de: enum de lei ativa (Normal/Alternate) no FlyByWire, gatilho de
+    reversão (falha/tecla), anúncio no HUD
 - **OSM altitude bug**: bake MSL elevation nos vértices em build-time (ao invés de `uBaseY` runtime); reativar update/render sem freeze de upload
 - **Modelo 3D E195**: substituir placeholder C172P (`data/models/erj195_parts.json` + OBJs já existem)
 - **Luzes da aeronave**: nav lights, strobe, landing lights

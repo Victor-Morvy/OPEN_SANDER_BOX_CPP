@@ -116,9 +116,13 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
 
         // PI no VS: P amortece, I acumula o pitch de trim necessário para
         // sustentar o VS demandado (P puro deixava ~30% de déficit: 543/800)
+        // Anti-windup: só integra quando rastreando (|erro| < 500 fpm) — se o VS
+        // demandado excede a performance, o erro persistente NÃO acumula pitch.
+        // Sem isso: windup a 12° na subida → puxada forte + oscilação na captura.
         float vsErr = vsDemand - st.vsFpm;
-        _vsInteg   += KI_VS * vsErr * dt;
-        _vsInteg    = std::clamp(_vsInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
+        if (std::abs(vsErr) < 500.f)
+            _vsInteg += KI_VS * vsErr * dt;
+        _vsInteg = std::clamp(_vsInteg, -6.f, 6.f);
         float rawPitch  = std::clamp(KP_VS * vsErr + _vsInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
         // Rate limiter: pitch target não pula — máximo PITCH_RATE °/s
         float delta     = std::clamp(rawPitch - targets.pitchDeg, -PITCH_RATE * dt, PITCH_RATE * dt);

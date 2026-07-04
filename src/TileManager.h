@@ -44,6 +44,10 @@ public:
 
     float visScale = 1.0f;  // multiplicador da distância de visibilidade (1=padrão, 5=5×)
 
+    // false para camadas LOD distantes: desenham em ordem pintor sem escrever
+    // depth — a camada fina desenhada depois sempre vence (sem z-fighting).
+    bool depthWrite = true;
+
     // Elevação em metros MSL na posição do avião. Retorna 0 até tiles carregarem.
     float getElevAt(glm::vec3 acWorld) const;
 

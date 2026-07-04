@@ -41,6 +41,11 @@ uniform vec3  uAcWorld;
 uniform float uYBias;   // deslocamento Y para evitar z-fighting entre LODs
 void main() {
     vec3 world = vec3(aPos.x + uTileOrig.x, aPos.y + uYBias, aPos.z + uTileOrig.z);
+    // Curvatura da Terra: rebaixa vértices distantes (drop = d²/2R).
+    // Esconde a borda do grid atrás do horizonte real (~330 km a FL280),
+    // exatamente como na Terra de verdade.
+    vec2  dxz = world.xz - uAcWorld.xz;
+    world.y  -= dot(dxz, dxz) / (2.0 * 6371000.0);
     gl_Position = uVP * vec4(world - uAcWorld, 1.0);
     vUV    = aUV;
     vWorld = world;
@@ -69,20 +74,15 @@ void main() {
     }
     float diff = clamp(uSunDir.y * 0.6 + 0.4, 0.0, 1.0);
     col *= mix(0.08, diff, uDay);
+
+    // Fog atmosférico — dia claro e bom: ~40 km no solo, ~170 km a FL280,
+    // ~240 km a FL400 (uVisScale = multiplicador global, padrão 1.0)
     float d   = length(vWorld.xz - uAcWorld.xz);
     float alt = max(uAcWorld.y, 0.0);
+    float vis = max(40000.0, alt * 20.0) * uVisScale;
+    float fog = exp(-5.0 * pow(d / vis, 6.0));
 
-    // Fog atmosférico controlado pelo slider (escala com altitude)
-    float vis     = max(50000.0, alt * 80.0) * uVisScale;
-    float atmFade = exp(-5.0 * pow(d / vis, 6.0));
-
-    // Fade circular: smoothstep de 800 km a 1200 km — tiles somem ANTES da borda do grid,
-    // que fica completamente transparente. Resultado é circular, sem "linha reta".
-    float edgeFade = 1.0 - smoothstep(800000.0, 1200000.0, d);
-
-    float fog = min(edgeFade, atmFade);
-
-    // Mesma cor do earthHaze do Sky shader — transição invisível além dos tiles
+    // Mesma cor do earthHaze do Sky shader — transição invisível no horizonte
     vec3 fc = mix(vec3(.008,.010,.018), vec3(.50,.68,.88), uDay);
     col = mix(fc, col, clamp(fog, 0.0, 1.0));
     FragColor = vec4(pow(col, vec3(1.0/2.2)), 1.0);
@@ -157,6 +157,9 @@ TileManager::TileData TileManager::loadTile(TileKey key,
 
     auto elevPng=httpGet(buildUrl(URL_ELEV,z,tx,ty));
     auto texPng =httpGet(buildUrl(URL_TEX, z,tx,ty));
+    if(elevPng.empty()||texPng.empty())
+        fprintf(stderr,"[Tile z=%d %d/%d] FALHA HTTP elev=%zu tex=%zu bytes\n",
+                z,tx,ty,elevPng.size(),texPng.size());
 
     auto [nwLat,nwLon]=tileNWLatLon(tx,  ty,  z);
     auto [seLat,seLon]=tileNWLatLon(tx+1,ty+1,z);
@@ -327,6 +330,9 @@ void TileManager::uploadTile(TileData& d){
     }
 
     _gpu[d.key]=std::move(g);
+    printf("[Tile z=%d %d/%d] ok  tex=%dx%d  gpu=%zu/%d\n",
+           d.key.z,d.key.x,d.key.y,d.texW,d.texH,
+           _gpu.size(),(2*_grid+1)*(2*_grid+1));
 }
 
 void TileManager::processUploads(){
@@ -472,7 +478,22 @@ void TileManager::render(const glm::mat4& VP,
     glUniform1f (uYBias,_yBias);
     glUniform1f (glGetUniformLocation(_prog,"uVisScale"), visScale);
 
-    for(auto& [key,g]:_gpu){
+    // Ordem pintor: tile mais distante primeiro (importante quando depthWrite
+    // está desligado — a oclusão entre tiles vem da ordem de desenho)
+    std::vector<const GpuTile*> order;
+    order.reserve(_gpu.size());
+    for(auto& [key,g]:_gpu) order.push_back(&g);
+    auto dist2=[&](const GpuTile* g){
+        float cx=g->worldX+g->tileSzX*0.5f-acWorld.x;
+        float cz=g->worldZ+g->tileSzZ*0.5f-acWorld.z;
+        return cx*cx+cz*cz;
+    };
+    std::sort(order.begin(),order.end(),
+              [&](const GpuTile* a,const GpuTile* b){ return dist2(a)>dist2(b); });
+
+    if(!depthWrite) glDepthMask(GL_FALSE);
+    for(const GpuTile* gp:order){
+        const GpuTile& g=*gp;
         glm::vec3 orig(g.worldX,0.f,g.worldZ);
         glUniform3fv(uTileOrig,1,glm::value_ptr(orig));
         glUniform1i(uHasTex, g.tex!=0 ? 1 : 0);
@@ -482,6 +503,7 @@ void TileManager::render(const glm::mat4& VP,
         glDrawElements(GL_TRIANGLES,g.idxCount,GL_UNSIGNED_SHORT,nullptr);
         glBindVertexArray(0);
     }
+    if(!depthWrite) glDepthMask(GL_TRUE);
 }
 
 float TileManager::getElevAt(glm::vec3 acWorld) const{

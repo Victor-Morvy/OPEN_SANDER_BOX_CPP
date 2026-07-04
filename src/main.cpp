@@ -588,7 +588,7 @@ int main(){
     FlyByWire       fbw;
     GuidanceModule  gm;
     bool            guidancePanelOpen = false;
-    float           viewDistScale     = 3.0f;   // 1=fog denso, 10=ar limpo
+    float           viewDistScale     = 1.0f;   // 1=dia claro real, >1=ar mais limpo
     FlyByWire::SurfaceCmd surfCmd;
 
     // Condições iniciais para o E195 (voo de cruzeiro ~3500ft, 200 kt)
@@ -836,13 +836,13 @@ int main(){
         farTiles .visScale     = viewDistScale;
         closeTiles.visScale    = viewDistScale;
 
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(3.f, 150.f);   // empurra ultra-far mais para trás
+        // Camadas distantes sem escrita de depth, em ordem pintor: a camada fina
+        // desenhada depois sempre cobre a grossa — sem z-fighting nem polygon
+        // offset (offsets grandes causavam a "barreira reta" que cortava o mapa).
+        ultraFarTiles.depthWrite = false;
+        farTiles.depthWrite      = false;
         ultraFarTiles.render(proj*view, acWorld, acMslM, sunDir, day);
-        glPolygonOffset(1.f, 50.f);
         farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
-        glDisable(GL_POLYGON_OFFSET_FILL);
-
         closeTiles.render(proj*view, acWorld, acMslM, sunDir, day);
 
         // 3. Aeroportos (pistas opacas renderizadas antes das nuvens)

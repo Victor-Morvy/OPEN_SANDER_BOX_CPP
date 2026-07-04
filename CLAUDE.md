@@ -25,11 +25,12 @@ Simulador de voo nativo em C++ com física JSBSim e gráficos OpenGL 3.3. Aerona
 
 ```
 src/
-├── main.cpp            game loop, input, câmera chase, HUD ImGui
+├── main.cpp            game loop, input, câmeras, HUD ImGui, painel AFCS (F1)
 ├── FDM.cpp/.h          wrapper FGFDMExec — init, step, telemetria, E195 bridge
-├── FlyByWire.cpp/.h    leis FBW: C* pitch / roll direto / yaw direto
+├── FlyByWire.cpp/.h    FBW Normal Law: C* pitch / rate demand roll / yaw damper+beta
+├── GuidanceModule.cpp  AFCS: ALT/HDG/ATT hold, A/THR, flight director
 ├── Sky.cpp/.h          shader Preetham, bloom 2-pass
-├── TileManager.cpp/.h  grid 9×9 tiles AWS Terrarium elevation + ESRI texture
+├── TileManager.cpp/.h  3 LODs AWS Terrarium elevation + ESRI texture, curvatura
 ├── Terrain.cpp/.h      mesh fallback checkerboard
 ├── Clouds.cpp/.h       nuvens billboard instanced
 ├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI
@@ -49,12 +50,23 @@ CMakeLists.txt          build: vcpkg + FetchContent JSBSim
 - `TileManager::getElevAt()` retorna MSL bruto do Terrarium; componente Y do input é ignorado.
 - `uYBias` uniform sobe/desce o mesh de terreno no espaço mundo.
 
-### Dois LOD de terreno
+### Três LODs de terreno
 
 ```
-farTiles  (zoom 13, 4×33 grid) — yBias = −5 m  → garante ficar abaixo dos closeTiles
-closeTiles (zoom 15, 9×9 grid) — referência de altitude
+ultraFarTiles (zoom 7,  9×9,  vgrid 17) — ~1300 km raio — sem depth write
+farTiles      (zoom 12, 17×17, vgrid 33) — ~78 km raio  — sem depth write
+closeTiles    (zoom 15, 9×9,  vgrid 65) — ~10 km raio  — referência de altitude
 ```
+
+- **Curvatura da Terra** no TM_VERT: `world.y -= d²/(2·6371000)` — horizonte
+  físico (~330 km a FL280) esconde a borda do grid; getElevAt (CPU) não é afetado
+- **Sem polygon offset**: camadas distantes com `depthWrite=false`, tiles
+  ordenados do mais distante para o mais próximo (painter). NUNCA usar polygon
+  offset com muitas unidades: 150 unidades estourava depth > 1.0 → fragmentos
+  descartados = "barreira reta" cortando o terreno a ~11 km (cockpit near=0.05)
+- **Fog atmosférico**: `vis = max(40 km, alt×20) × visScale` — dia claro real;
+  cor = earthHaze do Sky shader
+- Far clip 2000 km; near 0.5 (externa) / 0.05 (cockpit)
 
 ### Prédios / OSM (uBaseY)
 
@@ -74,21 +86,34 @@ erro     = C*_dem − C*_atual
 elevator = −PID(erro)   // negativo = cabrar
 ```
 
-### Roll — direto (FBW desligado temporariamente)
+### Roll — rate demand / attitude hold (ativo)
 
-```cpp
-out.aileronL =  clamp1(inp.wheel);
-out.aileronR = -clamp1(inp.wheel);
+```
+Stick ativo  → demanda taxa (máx 22°/s), P na taxa real
+Stick neutro → attitude hold no banco capturado; proteção 33°, limite rígido 67°
 ```
 
-### Yaw — direto (yaw damper desligado temporariamente)
+### Yaw — yaw damper + auto-rudder PI no beta (ativo)
 
-```cpp
-out.rudder       = clamp1(inp.pedals);
-out.steerNoseDeg = inp.pedals * MAX_STEER_DEG;
+```
+rudder = pedals − yawDamperK·r + betaKp·β_filt + betaKi·∫β
 ```
 
-Roll e yaw foram simplificados para estabelecer o feeling do joystick antes de re-tunar as leis.
+Beta filtrado (passa-baixo α=0.80); integrador ±8 °·s elimina derrapagem
+residual em regime. No solo: pedais diretos, integrador zerado.
+
+### AFCS — GuidanceModule (exportável, sem deps de ImGui/GLFW)
+
+- **AltitudeHold**: alt → VS (KP_ALT=1.6, clamp ±3000 fpm) → pitch via PI
+  (KP_VS=0.009, KI_VS=0.0006). Anti-windup: só integra com |vsErr| < 500 fpm,
+  clamp ±6° — sem isso, windup na subida causava puxada + oscilação na captura.
+  V/S manual configurável pelo painel (targets.vsManual/vsFpm).
+- **HeadingHold**: hdgErr → bank demand (KP=3.0, máx 25°) via fbw.setTargetBank.
+- **SpeedHold (A/THR)**: alvo é PISO de velocidade. PI bidirecional assimétrico:
+  underspeed KP=0.025/KI=0.010, overspeed KP=0.015/KI=0.005 (integrador em
+  unidades de throttle, ±0.6) + boost de persistência a cada 1 s.
+- Pitch outer loop compartilhado: KP=0.022, KI=0.003, filtro COL_LP=0.70.
+- Auto-desconexão vert+lat com |column| ou |wheel| > 0.15.
 
 ---
 
@@ -215,8 +240,14 @@ Executável: `build/Release/webflight.exe`
 
 ## Pendências
 
-- **OSM altitude bug**: bake MSL elevation nos vértices em build-time (ao invés de `uBaseY` runtime)
-- **FBW roll/yaw**: re-habilitar rate demand roll e yaw damper depois de estabelecer feeling do joystick
-- **Autopilot**: altitude hold + heading hold (não iniciado)
-- **Modelo 3D E195**: substituir placeholder C172P por modelo real (não iniciado)
-- ~~Reversor~~ **feito**: toggle Y/△ ou tecla R; trava de solo no FBW (`inp.reverser && st.wow`); auto-stow em voo; HUD mostra `REV DEPLOYED`. JSBSim: `reverser-angle-rad = π` → thrust × cos(π) = −1
+- **OSM altitude bug**: bake MSL elevation nos vértices em build-time (ao invés de `uBaseY` runtime); reativar update/render sem freeze de upload
+- **Modelo 3D E195**: substituir placeholder C172P (`data/models/erj195_parts.json` + OBJs já existem)
+- **Luzes da aeronave**: nav lights, strobe, landing lights
+- **Oclusão de objetos distantes**: terreno far/ultraFar não escreve depth — nuvens/luzes de aeroporto a 20+ km podem aparecer na frente de morros que deveriam ocluí-los (raro em cruzeiro)
+
+## Feito (não re-implementar)
+
+- **Reversor**: toggle Y/△ ou tecla R; trava de solo no FBW (`inp.reverser && st.wow`); auto-stow em voo; HUD `REV DEPLOYED`. JSBSim: `reverser-angle-rad = π` → thrust × cos(π) = −1
+- **AFCS completo** (GuidanceModule): ALT/HDG/ATT hold, A/THR, flight director, painel F1
+- **FBW roll/yaw**: rate demand + attitude hold roll, yaw damper + beta PI
+- **Terreno 3 LODs** com curvatura da Terra e horizonte físico

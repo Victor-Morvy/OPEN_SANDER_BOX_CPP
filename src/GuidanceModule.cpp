@@ -20,6 +20,7 @@ void GuidanceModule::engageAltitude(const FlyByWire::AircraftState& st, FlyByWir
     targets.bankDeg  = st.rollDeg;
     targets.pitchDeg = st.pitchDeg;
     _pitchInteg      = 0.f;
+    _vsInteg         = st.pitchDeg;  // parte do pitch atual — engate sem degrau
     _columnFilt      = 0.f;
     fbw.setTargetBank(targets.bankDeg);
     mode.vert = VertMode::AltitudeHold;
@@ -46,6 +47,7 @@ void GuidanceModule::disengageVert()
 {
     mode.vert   = VertMode::Off;
     _pitchInteg = 0.f;
+    _vsInteg    = 0.f;
 }
 
 void GuidanceModule::disengageLat()
@@ -98,6 +100,7 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
     if (mode.vert == VertMode::AltitudeHold) {
         constexpr float KP_ALT      = 1.6f;
         constexpr float KP_VS       = 0.009f;
+        constexpr float KI_VS       = 0.0006f; // integrador: elimina erro de regime do VS
         constexpr float PITCH_RATE  = 4.0f;   // °/s
 
         float vsDemand;
@@ -111,8 +114,12 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
             vsDemand = std::clamp(KP_ALT * altErr, -MAX_VS_FPM, MAX_VS_FPM);
         }
 
-        float vsErr     = vsDemand - st.vsFpm;
-        float rawPitch  = std::clamp(KP_VS * vsErr, -MAX_PITCH_AP, MAX_PITCH_AP);
+        // PI no VS: P amortece, I acumula o pitch de trim necessário para
+        // sustentar o VS demandado (P puro deixava ~30% de déficit: 543/800)
+        float vsErr = vsDemand - st.vsFpm;
+        _vsInteg   += KI_VS * vsErr * dt;
+        _vsInteg    = std::clamp(_vsInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
+        float rawPitch  = std::clamp(KP_VS * vsErr + _vsInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
         // Rate limiter: pitch target não pula — máximo PITCH_RATE °/s
         float delta     = std::clamp(rawPitch - targets.pitchDeg, -PITCH_RATE * dt, PITCH_RATE * dt);
         targets.pitchDeg += delta;

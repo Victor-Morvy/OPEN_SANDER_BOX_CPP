@@ -87,6 +87,7 @@ private:
     static constexpr float MAX_PITCH_AP = 12.f;
 
     float _pitchInteg    = 0.f;
+    float _vsInteg       = 0.f;  // integrador VS→pitch (pitch de trim da subida)
     float _columnFilt    = 0.f;
     float _throttleInteg = 0.f;
     float _baseThrottle  = 0.f;

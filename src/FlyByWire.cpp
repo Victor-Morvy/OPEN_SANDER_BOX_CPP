@@ -92,12 +92,16 @@ void FlyByWire::update(float dt, const PilotInput& inp,
         }
 
         // Estabilidade de velocidade (soft, atua mesmo com stick ativo):
-        //   overspeed  (>330 kt)            → comanda nariz para cima
-        //   underspeed (<150 kt e gear UP)  → comanda nariz para baixo
-        //   (com gear DOWN não empurra o nariz — aproximação/pouso é lento por natureza)
+        //   overspeed  (>330 kt) → comanda nariz para cima
+        //   underspeed (<150 kt) → comanda nariz para baixo, SOMENTE se:
+        //     gear UP  E  (flaps ≤ curso 1  OU  speed brake aberto)
+        //   Em configuração de pouso (gear down / flaps estendidos) não empurra
+        //   o nariz — voo lento é intencional nessa configuração.
+        bool sbkOpen  = !st.wow && inp.brake > 0.05f && inp.flaps < (1.f/3.f);
+        bool cleanCfg = inp.flaps <= (1.f/6.f + 0.01f) || sbkOpen;
         if (st.casKt > gains.spdVHi)
             columnMod += std::min(0.5f, gains.spdStabK * (st.casKt - gains.spdVHi));
-        else if (st.casKt < gains.spdVLo && !inp.gearCmd)
+        else if (st.casKt < gains.spdVLo && !inp.gearCmd && cleanCfg)
             columnMod -= std::min(0.5f, gains.spdStabK * (gains.spdVLo - st.casKt));
 
         columnMod = std::clamp(columnMod, -1.f, 1.f);

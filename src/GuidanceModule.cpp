@@ -46,6 +46,7 @@ void GuidanceModule::engageFlch(const FlyByWire::AircraftState& st, FlyByWire& f
     targets.bankDeg  = st.rollDeg;
     targets.pitchDeg = st.pitchDeg;
     _flchInteg       = st.pitchDeg;   // parte do pitch atual — engate sem degrau
+    _flchThrTrim     = 0.f;
     _pitchInteg      = 0.f;
     _columnFilt      = 0.f;
     fbw.setTargetBank(targets.bankDeg);
@@ -65,10 +66,11 @@ void GuidanceModule::engageSpeed(const FlyByWire::AircraftState& st, float curre
 
 void GuidanceModule::disengageVert()
 {
-    mode.vert   = VertMode::Off;
-    _pitchInteg = 0.f;
-    _vsInteg    = 0.f;
-    _flchInteg  = 0.f;
+    mode.vert    = VertMode::Off;
+    _pitchInteg  = 0.f;
+    _vsInteg     = 0.f;
+    _flchInteg   = 0.f;
+    _flchThrTrim = 0.f;
 }
 
 void GuidanceModule::disengageLat()
@@ -174,11 +176,13 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         targets.pitchDeg += delta;
     }
 
-    // ── FLCH: throttle fixo (climb/idle), pitch controla a velocidade ────────
+    // ── FLCH: pitch controla a velocidade; throttle cede se o pitch saturar ──
     if (mode.vert == VertMode::Flch) {
         constexpr float FLCH_KP    = 0.15f;   // ° por kt de erro
         constexpr float FLCH_KI    = 0.02f;   // °/s por kt (trim)
         constexpr float PITCH_RATE = 3.0f;    // °/s máx no target
+        constexpr float PITCH_CLB  = 17.f;    // teto de pitch na subida
+        constexpr float PITCH_DES  = -12.f;   // piso de pitch na descida
 
         float altErr = targets.altFt - st.altBaro;
         if (std::abs(altErr) < 250.f) {
@@ -186,30 +190,50 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
             mode.vert        = VertMode::AltitudeHold;
             targets.vsManual = false;
             _vsInteg         = st.pitchDeg;
+            _flchThrTrim     = 0.f;
             if (mode.thr == ThrMode::SpeedHold) {
                 _baseThrottle  = _flchThr;   // retoma speed hold do throttle atual
                 _throttleInteg = 0.f;
                 _thrBoost      = 0.f;
             }
         } else {
-            bool climb = altErr > 0.f;
-            _flchThr = climb ? 0.92f : 0.08f;
+            bool  climb = altErr > 0.f;
+            float pMax  = climb ? PITCH_CLB : 6.f;    // descendo não cabra além de +6
+            float pMin  = climb ? -4.f : PITCH_DES;   // subindo não pica além de −4
 
             // Speed-on-pitch: rápido → nariz sobe; lento → nariz desce
             float spdErr = st.casKt - targets.speedKt;   // + = rápido demais
-            // Anti-windup por saturação: só congela quando o pitch demandado já
-            // saturou NO MESMO sentido do erro (congelar por erro grande deixava
-            // 27 kt de erro em regime — o integrador é mais necessário aí)
-            float rawUnclamped = FLCH_KP * spdErr + _flchInteg;
-            if (std::abs(rawUnclamped) < MAX_PITCH_AP || rawUnclamped * spdErr < 0.f)
+            // Anti-windup por saturação (nunca por magnitude do erro)
+            float rawUn = FLCH_KP * spdErr + _flchInteg;
+            bool  satHi = rawUn >= pMax, satLo = rawUn <= pMin;
+            if (!(satHi && spdErr > 0.f) && !(satLo && spdErr < 0.f))
                 _flchInteg += FLCH_KI * spdErr * dt;
-            _flchInteg = std::clamp(_flchInteg, -MAX_PITCH_AP, MAX_PITCH_AP);
+            _flchInteg = std::clamp(_flchInteg, pMin, pMax);
 
-            float rawPitch = std::clamp(FLCH_KP * spdErr + _flchInteg,
-                                        -MAX_PITCH_AP, MAX_PITCH_AP);
+            float rawPitch = std::clamp(FLCH_KP * spdErr + _flchInteg, pMin, pMax);
             float delta = std::clamp(rawPitch - targets.pitchDeg,
                                      -PITCH_RATE * dt, PITCH_RATE * dt);
             targets.pitchDeg += delta;
+
+            // Throttle dinâmico: a velocidade do A/THR tem prioridade sobre a
+            // razão de subida/descida. Cede potência proporcionalmente ao
+            // overspeed (era fixo 0.92/0.08 e a velocidade escapava do alvo
+            // quando o pitch não bastava — ex: motor forte em baixa altitude)
+            if (climb) {
+                if (spdErr > 3.f)
+                    _flchThrTrim -= 0.015f * spdErr * dt;  // rápido → tira potência
+                else if (spdErr < 0.f)
+                    _flchThrTrim += 0.10f * dt;            // devagar → devolve
+                _flchThrTrim = std::clamp(_flchThrTrim, -0.7f, 0.f);
+                _flchThr = 0.92f + _flchThrTrim;
+            } else {
+                if (spdErr < -3.f)
+                    _flchThrTrim += 0.015f * -spdErr * dt; // devagar → põe potência
+                else if (spdErr > 0.f)
+                    _flchThrTrim -= 0.10f * dt;            // rápido → volta ao idle
+                _flchThrTrim = std::clamp(_flchThrTrim, 0.f, 0.7f);
+                _flchThr = 0.08f + _flchThrTrim;
+            }
         }
     }
 

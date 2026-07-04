@@ -103,7 +103,8 @@ private:
     float _pitchInteg    = 0.f;
     float _vsInteg       = 0.f;  // integrador VS→pitch (pitch de trim da subida)
     float _flchInteg     = 0.f;  // integrador FLCH: pitch de trim p/ manter CAS
-    float _flchThr       = 0.f;  // throttle fixo do FLCH (climb/idle)
+    float _flchThr       = 0.f;  // throttle do FLCH (climb/idle + trim dinâmico)
+    float _flchThrTrim   = 0.f;  // cede potência quando pitch satura e CAS foge
     float _columnFilt    = 0.f;
     float _throttleInteg = 0.f;
     float _baseThrottle  = 0.f;

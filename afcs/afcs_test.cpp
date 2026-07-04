@@ -96,7 +96,7 @@ static void testLNAV() {
 }
 
 // ── 4. FLCH: subida e descida com captura ─────────────────────────────────────
-static void runFlch(float alt0, float altTgt, float spdTgt,
+static void runFlch(float alt0, float altTgt, float spdTgt, float engineK,
                     float* vMin, float* vMax, float* altFinal, bool* captured) {
     GuidanceModule gm;
     FlyByWire fbw;
@@ -126,7 +126,7 @@ static void runFlch(float alt0, float altTgt, float spdTgt,
         pitch += (gm.targets.pitchDeg - pitch) * dt / 1.5f;
         float gamma = pitch - 2.5f;
         alt += V * 1.68781f * std::sin(gamma * (float)D2R) * dt;
-        V   += (9.f * (thr - V / 400.f) - 0.55f * gamma) * dt;
+        V   += (engineK * (thr - V / 400.f) - 0.55f * gamma) * dt;
 
         if (t > 10.f) { *vMin = std::fmin(*vMin, V); *vMax = std::fmax(*vMax, V); }
         if (gm.mode.vert == GuidanceModule::VertMode::AltitudeHold) *captured = true;
@@ -137,17 +137,25 @@ static void runFlch(float alt0, float altTgt, float spdTgt,
 static void testFLCH() {
     printf("\n== FLCH: subida 20k->28k @ 250 kt ==\n");
     float vMin, vMax, altF; bool cap;
-    runFlch(20000.f, 28000.f, 250.f, &vMin, &vMax, &altF, &cap);
+    runFlch(20000.f, 28000.f, 250.f, 9.f, &vMin, &vMax, &altF, &cap);
     printf("      alt final %.0f  V min/max %.1f/%.1f\n", altF, vMin, vMax);
     check(cap, "capturou (FLCH -> ALT HOLD)");
     check(std::fabs(altF - 28000.f) < 300.f, "altitude final < 300 ft do alvo");
     check(vMin > 225.f && vMax < 285.f, "velocidade segurada (225-285)");
 
     printf("\n== FLCH: descida 28k->12k @ 280 kt ==\n");
-    runFlch(28000.f, 12000.f, 280.f, &vMin, &vMax, &altF, &cap);
+    runFlch(28000.f, 12000.f, 280.f, 9.f, &vMin, &vMax, &altF, &cap);
     printf("      alt final %.0f  V min/max %.1f/%.1f\n", altF, vMin, vMax);
     check(cap, "capturou (FLCH -> ALT HOLD)");
     check(std::fabs(altF - 12000.f) < 300.f, "altitude final < 300 ft do alvo");
+
+    // Motor forte (baixa altitude, avião leve): mesmo com o pitch no teto a
+    // velocidade fugia do alvo do A/THR — o throttle deve ceder para respeitar
+    printf("\n== FLCH: subida 5k->15k @ 250 kt, MOTOR FORTE (2.5x) ==\n");
+    runFlch(5000.f, 15000.f, 250.f, 22.f, &vMin, &vMax, &altF, &cap);
+    printf("      alt final %.0f  V min/max %.1f/%.1f\n", altF, vMin, vMax);
+    check(cap, "capturou (FLCH -> ALT HOLD)");
+    check(vMax < 275.f, "velocidade respeitada mesmo com excesso de potencia (<275)");
 }
 
 int main() {

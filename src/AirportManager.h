@@ -13,7 +13,7 @@ public:
               double originLat, double originLon);
 
     void update(const glm::vec3& acWorld, float acMslM,
-                TileManager& close, TileManager& far_);
+                TileManager& close, TileManager& far_, TileManager& near_);
 
     void render(const glm::mat4& VP,
                 const glm::vec3& acWorld, float acMslM, float day);
@@ -71,8 +71,8 @@ private:
 
     glm::vec2 toWorld(float lat, float lon) const;
     void      clearActive();
-    void      addAirportGpu(const Airport& ap,
-                             TileManager& close, TileManager& far_);
+    void      addAirportGpu(const Airport& ap, TileManager& close,
+                             TileManager& far_, TileManager& near_);
     void      buildGpuRwy(GpuRwy& g);
     void      rebuildLightVBO(const glm::vec3& acWorld, float acMslM, float day);
 };

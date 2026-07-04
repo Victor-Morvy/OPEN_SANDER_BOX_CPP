@@ -520,10 +520,11 @@ int main(){
     //   ultraFarTiles: zoom  9, 9×9 tiles × ~39 km = ~156 km raio
     //   farTiles     : zoom 12, 17×17 × ~10 km     =  ~78 km raio
     //   closeTiles   : zoom 15, 9×9 × 1.2 km       =  ~10 km raio
-    TileManager ultraFarTiles, farTiles, closeTiles;
+    TileManager ultraFarTiles, farTiles, closeTiles, nearTiles;
     ultraFarTiles.init(ORIGIN_LAT, ORIGIN_LON,  7, 4, 17, -1.0f); // zoom 7: 9×9=81 tiles ~1250km raio
     farTiles .init(ORIGIN_LAT, ORIGIN_LON, 12, 8, 33, -0.2f);     // zoom 12: 17×17=289 tiles ~78km
-    closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 4, 65,  0.f);     // referência de altitude
+    closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 8, 65,  0.f);     // zoom 15: 17×17 ±9.4km — referência de altitude
+    nearTiles.init(ORIGIN_LAT, ORIGIN_LON, 17, 4, 33,  0.f);      // zoom 17: 9×9 ±1.3km — 1.2 m/px no solo
 
     Clouds clouds; clouds.init();
 
@@ -744,6 +745,7 @@ int main(){
         ultraFarTiles.update(acWorld, ORIGIN_LAT, ORIGIN_LON);
         farTiles .update(acWorld, ORIGIN_LAT, ORIGIN_LON);
         closeTiles.update(acWorld, ORIGIN_LAT, ORIGIN_LON);
+        nearTiles.update(acWorld, ORIGIN_LAT, ORIGIN_LON);
         clouds.update(acWorld);
 
         // Elevação real: preferir zoom 15 (mais preciso), fallback zoom 13
@@ -753,7 +755,7 @@ int main(){
         float acMslM = terrainElev_m + (float)wpos.y;
 
         // Aeroportos (precisa acMslM para PAPI)
-        airports.update(acWorld, acMslM, closeTiles, farTiles);
+        airports.update(acWorld, acMslM, closeTiles, farTiles, nearTiles);
         // osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles); // pesado: ~40k draw calls — precisa de batching antes de reativar
 
         if(fdmOk && !paused){
@@ -843,19 +845,22 @@ int main(){
         // 1. Sky
         sky.render(view,proj,sunDir,day);
 
-        // 2. Terrain tiles reais (ultraFar → far → close, do mais distante para o mais próximo)
+        // 2. Terrain tiles reais (ultraFar → far → close → near, distante → próximo)
         ultraFarTiles.visScale = viewDistScale;
         farTiles .visScale     = viewDistScale;
         closeTiles.visScale    = viewDistScale;
+        nearTiles.visScale     = viewDistScale;
 
-        // Camadas distantes sem escrita de depth, em ordem pintor: a camada fina
+        // Ordem pintor: só a ÚLTIMA camada (mais fina) escreve depth. Camada fina
         // desenhada depois sempre cobre a grossa — sem z-fighting nem polygon
         // offset (offsets grandes causavam a "barreira reta" que cortava o mapa).
         ultraFarTiles.depthWrite = false;
         farTiles.depthWrite      = false;
+        closeTiles.depthWrite    = false;
         ultraFarTiles.render(proj*view, acWorld, acMslM, sunDir, day);
         farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
         closeTiles.render(proj*view, acWorld, acMslM, sunDir, day);
+        nearTiles.render(proj*view, acWorld, acMslM, sunDir, day);
 
         // 3. Aeroportos (pistas opacas renderizadas antes das nuvens)
         airports.render(proj*view, acWorld, acMslM, day);
@@ -1440,7 +1445,8 @@ int main(){
         glfwSwapBuffers(win);
     }
 
-    sky.cleanup(); ultraFarTiles.cleanup(); farTiles.cleanup(); closeTiles.cleanup();
+    sky.cleanup(); ultraFarTiles.cleanup(); farTiles.cleanup();
+    closeTiles.cleanup(); nearTiles.cleanup();
     clouds.cleanup(); airports.cleanup(); osm.cleanup(); postfx.cleanup();
     e195.cleanup(); cockpit.cleanup();
     glDeleteVertexArrays(1,&ptVAO); glDeleteBuffers(1,&ptVBO);

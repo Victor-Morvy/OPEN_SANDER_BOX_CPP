@@ -305,8 +305,8 @@ void AirportManager::clearActive() {
 
 // ── addAirportGpu ─────────────────────────────────────────────────────────────
 
-void AirportManager::addAirportGpu(const Airport& ap,
-                                    TileManager& close, TileManager& far_)
+void AirportManager::addAirportGpu(const Airport& ap, TileManager& close,
+                                    TileManager& far_, TileManager& near_)
 {
     const auto& rws = _runways.at(ap.ident);
     for (const auto& rw : rws) {
@@ -347,6 +347,7 @@ void AirportManager::addAirportGpu(const Airport& ap,
         float halfL = g.lengthM * 0.5f;
         close.registerFlatArea(cx, cz, halfW, halfL, heading, g.elevLE, g.elevHE, 200.f);
         far_ .registerFlatArea(cx, cz, halfW, halfL, heading, g.elevLE, g.elevHE, 200.f);
+        near_.registerFlatArea(cx, cz, halfW, halfL, heading, g.elevLE, g.elevHE, 200.f);
 
         _activeRwys.push_back(g);
     }
@@ -430,7 +431,8 @@ void AirportManager::rebuildLightVBO(const glm::vec3& acWorld, float acMslM, flo
 // ── update ────────────────────────────────────────────────────────────────────
 
 void AirportManager::update(const glm::vec3& acWorld, float acMslM,
-                             TileManager& close, TileManager& far_)
+                             TileManager& close, TileManager& far_,
+                             TileManager& near_)
 {
     // Converter posição do avião de volta para lat/lon (equirectangular reverso)
     double acLat = _originLat - acWorld.z / 111320.0;
@@ -454,7 +456,7 @@ void AirportManager::update(const glm::vec3& acWorld, float acMslM,
                 glm::vec2 w = toWorld(ap.lat, ap.lon);
                 float dx = w.x - acWorld.x, dz = w.y - acWorld.z;
                 if (dx*dx + dz*dz > SHOW_RADIUS_M*SHOW_RADIUS_M) continue;
-                addAirportGpu(ap, close, far_);
+                addAirportGpu(ap, close, far_, near_);
             }
         }
     }

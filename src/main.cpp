@@ -1352,16 +1352,6 @@ int main(){
                 }
             }
 
-            ImGui::Separator();
-
-            // ── Visibilidade ───────────────────────────────────────────────────
-            ImGui::Text("VIS");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(260.f);
-            ImGui::SliderFloat("×##vis", &viewDistScale, 1.0f, 10.0f, "%.1f×");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("RST##vis")) viewDistScale = 1.0f;
-
             ImGui::TextDisabled("F1 = fechar painel");
             ImGui::End();
         }

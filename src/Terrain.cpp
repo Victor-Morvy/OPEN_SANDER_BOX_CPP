@@ -45,12 +45,12 @@ in vec3 vColor;
 out vec4 FragColor;
 uniform vec3  uAcPos;
 uniform float uDay;
+uniform float uFogDensity;   // densidade de fog configurável (padrão = 0.00003)
 
 void main() {
     vec3 col = vColor;
-    // Fog exponencial baseado na distância XZ ao avião
     float dist = length(vWorldXZ - uAcPos.xz);
-    float fog  = exp(-dist * 0.00003);
+    float fog  = exp(-dist * uFogDensity);
     vec3 fogDay   = vec3(0.68, 0.75, 0.88);
     vec3 fogNight = vec3(0.04, 0.05, 0.08);
     vec3 fogCol   = mix(fogNight, fogDay, uDay);
@@ -128,6 +128,7 @@ void Terrain::render(const glm::mat4& view, const glm::mat4& proj,
     glUniform3fv      (glGetUniformLocation(_prog,"uAcPos"),  1,glm::value_ptr(acWorldPos));
     glUniform1f       (glGetUniformLocation(_prog,"uTileM"),  _tileM);
     glUniform1f       (glGetUniformLocation(_prog,"uDay"),    day);
+    glUniform1f       (glGetUniformLocation(_prog,"uFogDensity"), fogDensity);
 
     glBindVertexArray(_vao);
     glDrawElements(GL_TRIANGLES,_idxCount,GL_UNSIGNED_INT,nullptr);

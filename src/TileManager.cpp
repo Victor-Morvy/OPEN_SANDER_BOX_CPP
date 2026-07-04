@@ -57,6 +57,7 @@ uniform bool      uHasTex;
 uniform vec3      uSunDir;
 uniform float     uDay;
 uniform vec3      uAcWorld;
+uniform float     uVisScale;   // multiplicador de distância de visibilidade
 void main() {
     vec3 col;
     if(uHasTex) {
@@ -68,14 +69,21 @@ void main() {
     }
     float diff = clamp(uSunDir.y * 0.6 + 0.4, 0.0, 1.0);
     col *= mix(0.08, diff, uDay);
-    // Névoa Gaussiana altitude-dependente: mantém terreno claro de perto,
-    // funde para zero antes da borda do grid (~38 km a FL150)
     float d   = length(vWorld.xz - uAcWorld.xz);
-    float alt = max(uAcWorld.y, 100.0);
-    float vis = clamp(8000.0 + alt * 7.5, 8000.0, 35000.0) * 7.0;
-    float t   = d / vis;
-    float fog = exp(-5.0 * pow(t, 6.0));
-    vec3  fc  = mix(vec3(.004,.005,.012), vec3(.21,.43,.74), uDay);
+    float alt = max(uAcWorld.y, 0.0);
+
+    // Fog atmosférico controlado pelo slider (escala com altitude)
+    float vis     = max(50000.0, alt * 80.0) * uVisScale;
+    float atmFade = exp(-5.0 * pow(d / vis, 6.0));
+
+    // Fade circular: smoothstep de 800 km a 1200 km — tiles somem ANTES da borda do grid,
+    // que fica completamente transparente. Resultado é circular, sem "linha reta".
+    float edgeFade = 1.0 - smoothstep(800000.0, 1200000.0, d);
+
+    float fog = min(edgeFade, atmFade);
+
+    // Mesma cor do earthHaze do Sky shader — transição invisível além dos tiles
+    vec3 fc = mix(vec3(.008,.010,.018), vec3(.50,.68,.88), uDay);
     col = mix(fc, col, clamp(fog, 0.0, 1.0));
     FragColor = vec4(pow(col, vec3(1.0/2.2)), 1.0);
 }
@@ -462,6 +470,7 @@ void TileManager::render(const glm::mat4& VP,
     glUniform1f (uDay,day);
     glUniform1i (uTex,0);
     glUniform1f (uYBias,_yBias);
+    glUniform1f (glGetUniformLocation(_prog,"uVisScale"), visScale);
 
     for(auto& [key,g]:_gpu){
         glm::vec3 orig(g.worldX,0.f,g.worldZ);

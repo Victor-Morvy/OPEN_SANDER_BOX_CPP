@@ -318,8 +318,10 @@ static bool readJoystick(Axes& a, float dt){
         a.apBtn    = B(6);
         a.altBtn   = B(1);
 
-        // ── Y/△ = reversor ────────────────────────────────────────────────────
-        a.reverser = B(3);
+        // ── Y/△ = reversor (toggle; só deploya no solo — gate no FBW) ────────
+        static bool prevRev = false;
+        if(B(3) && !prevRev) a.reverser = !a.reverser;
+        prevRev = B(3);
 
         // ── R3 click = resetar câmera ao padrão ──────────────────────────────
         // B(9)=R3 Xbox/DInput  B(11)=R3 PS4/DualSense
@@ -393,6 +395,12 @@ static void updateAxes(Axes& a, GLFWwindow* w, float dt){
     if(vNow&&!vPrev) gFlapsStep=std::min(1.f,gFlapsStep+1.f/6.f);
     fPrev=fNow; vPrev=vNow;
     a.flaps = gFlapsStep;
+
+    // Reversor (R — toggle; só deploya no solo — gate no FBW)
+    static bool rPrev=false;
+    bool rNow=K(GLFW_KEY_R);
+    if(rNow && !rPrev) a.reverser = !a.reverser;
+    rPrev = rNow;
 }
 
 // ── Posição mundial (double precision) ───────────────────────────────────────
@@ -508,11 +516,14 @@ int main(){
     Sky         sky; sky.init();
 
     // LOD 2 níveis:
-    //   farTiles  : zoom 13, 17×17 × 4.5 km ≈ 76 km diam (~38 km raio), Y−5 m (sem z-fight)
-    //   closeTiles: zoom 15,  9×9 × 1.2 km ≈ 10 km diam, Y normal
-    TileManager farTiles, closeTiles;
-    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 13, 8, 33, -0.2f); // 17×17 tiles = ~38 km raio
-    closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 4, 65,  0.f); // referência de altitude
+    // 3 camadas LOD de terreno:
+    //   ultraFarTiles: zoom  9, 9×9 tiles × ~39 km = ~156 km raio
+    //   farTiles     : zoom 12, 17×17 × ~10 km     =  ~78 km raio
+    //   closeTiles   : zoom 15, 9×9 × 1.2 km       =  ~10 km raio
+    TileManager ultraFarTiles, farTiles, closeTiles;
+    ultraFarTiles.init(ORIGIN_LAT, ORIGIN_LON,  7, 4, 17, -1.0f); // zoom 7: 9×9=81 tiles ~1250km raio
+    farTiles .init(ORIGIN_LAT, ORIGIN_LON, 12, 8, 33, -0.2f);     // zoom 12: 17×17=289 tiles ~78km
+    closeTiles.init(ORIGIN_LAT, ORIGIN_LON, 15, 4, 65,  0.f);     // referência de altitude
 
     Clouds clouds; clouds.init();
 
@@ -577,6 +588,7 @@ int main(){
     FlyByWire       fbw;
     GuidanceModule  gm;
     bool            guidancePanelOpen = false;
+    float           viewDistScale     = 3.0f;   // 1=fog denso, 10=ar limpo
     FlyByWire::SurfaceCmd surfCmd;
 
     // Condições iniciais para o E195 (voo de cruzeiro ~3500ft, 200 kt)
@@ -599,6 +611,9 @@ int main(){
     float  localHour = 10.5f;
     bool   timeAuto  = false;
     bool   f2prev    = false;
+
+    // Última saída do GuidanceModule (acessível no HUD fora do bloco de física)
+    GuidanceModule::Output gmOut;
 
     // ── Pausa / Reposicionamento ────────────────────────────────────────────────
     bool paused = false;
@@ -714,6 +729,7 @@ int main(){
         glm::vec3 acWorld((float)wpos.x,(float)wpos.y,(float)wpos.z);
 
         // Atualiza tiles e nuvens
+        ultraFarTiles.update(acWorld, ORIGIN_LAT, ORIGIN_LON);
         farTiles .update(acWorld, ORIGIN_LAT, ORIGIN_LON);
         closeTiles.update(acWorld, ORIGIN_LAT, ORIGIN_LON);
         clouds.update(acWorld);
@@ -743,8 +759,10 @@ int main(){
             // 2. Lê estado atual do JSBSim → FBW
             FlyByWire::AircraftState acSt = fdm.getStateForFBW();
 
+            // Reversor não arma em voo: limpa o toggle se sem peso nas rodas
+            if (!acSt.wow) axes.reverser = false;
+
             // 2.5. GuidanceModule: modifica inp antes do FBW
-            GuidanceModule::Output gmOut;
             gm.update((float)dt, acSt, inp, fbw, gmOut);
             if (gmOut.overrideThrottle) {
                 inp.throttle[0] = gmOut.throttle[0];
@@ -804,7 +822,7 @@ int main(){
             // camYaw=0, camPitch=0.26 → comportamento idêntico ao chase original
             view = orbitView(tel, axes.camYaw, axes.camPitch);
         }
-        glm::mat4 proj = glm::perspective(glm::radians(fovDeg), aspect, nearClip, 200000.f);
+        glm::mat4 proj = glm::perspective(glm::radians(fovDeg), aspect, nearClip, 2000000.f);
 
         // Redireciona render para FBO HDR (bloom será aplicado depois)
         postfx.bind(fw, fh);
@@ -813,15 +831,18 @@ int main(){
         // 1. Sky
         sky.render(view,proj,sunDir,day);
 
-        // 2. Terrain tiles reais
-        // Far (zoom 13) com polygon offset positivo → empurra levemente para trás no
-        // depth buffer, prevenindo z-fighting com closeTiles sem deslocar a geometria.
+        // 2. Terrain tiles reais (ultraFar → far → close, do mais distante para o mais próximo)
+        ultraFarTiles.visScale = viewDistScale;
+        farTiles .visScale     = viewDistScale;
+        closeTiles.visScale    = viewDistScale;
+
         glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(1.f, 50.f);    // empurra far tiles levemente — evita z-fight com close
+        glPolygonOffset(3.f, 150.f);   // empurra ultra-far mais para trás
+        ultraFarTiles.render(proj*view, acWorld, acMslM, sunDir, day);
+        glPolygonOffset(1.f, 50.f);
         farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
         glDisable(GL_POLYGON_OFFSET_FILL);
 
-        // Close (zoom 15) sem offset — depth test elimina o far onde se sobrepõem.
         closeTiles.render(proj*view, acWorld, acMslM, sunDir, day);
 
         // 3. Aeroportos (pistas opacas renderizadas antes das nuvens)
@@ -899,7 +920,7 @@ int main(){
         ImGui::NewFrame();
 
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
-        ImGui::SetNextWindowSize({260,430},ImGuiCond_Always);
+        ImGui::SetNextWindowSize({260,560},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.75f);
         ImGui::Begin("##hud",nullptr,
             ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
@@ -931,9 +952,14 @@ int main(){
             auto lm = gm.mode.lat;
             auto tm = gm.mode.thr;
             if (vm == GuidanceModule::VertMode::AltitudeHold) {
-                ImGui::TextColored({.2f,.8f,1.f,1.f},
-                    "AP ALT  %5.0f ft  PCH%+.1f°",
-                    gm.targets.altFt, gm.targets.pitchDeg);
+                if (gm.targets.vsManual)
+                    ImGui::TextColored({.2f,.8f,1.f,1.f},
+                        "AP ALT  %5.0f ft  V/S%+.0f",
+                        gm.targets.altFt, gm.targets.vsFpm);
+                else
+                    ImGui::TextColored({.2f,.8f,1.f,1.f},
+                        "AP ALT  %5.0f ft  PCH%+.1f°",
+                        gm.targets.altFt, gm.targets.pitchDeg);
             } else if (vm == GuidanceModule::VertMode::AttitudeHold) {
                 ImGui::TextColored({.2f,1.f,.4f,1.f},
                     "AP ATT  PCH%+.1f°  ROL%+.1f°",
@@ -947,7 +973,7 @@ int main(){
                     "HDG SEL  %03.0f°", gm.targets.headingDeg);
             if (tm == GuidanceModule::ThrMode::SpeedHold)
                 ImGui::TextColored({.9f,.9f,.2f,1.f},
-                    "A/THR  %3.0f kt", gm.targets.speedKt);
+                    "A/THR  VMIN %3.0f kt", gm.targets.speedKt);
         }
 
         ImGui::Separator();
@@ -963,7 +989,16 @@ int main(){
             ImGui::TextColored(engColor(1), "ENG2 N1%4.1f%% %s",
                                tel.n1[1], fdm.engineCutoff(1)?"[CUT]":"[ON] ");
             ImGui::Text(       "N2   L%4.1f%%  R%4.1f%%", tel.n2[0], tel.n2[1]);
-            ImGui::Text(       "THR  %3.0f%%", axes.thr*100.f);
+            if (gmOut.overrideThrottle)
+                ImGui::TextColored({.9f,.9f,.2f,1.f},
+                    "THR  cmd%3.0f%%  lev%3.0f%%",
+                    gmOut.throttle[0]*100.f, axes.thr*100.f);
+            else
+                ImGui::Text(   "THR  %3.0f%%", axes.thr*100.f);
+            if (surfCmd.reverser)
+                ImGui::TextColored({1.f,.55f,.1f,1.f}, "REV  DEPLOYED");
+            else if (axes.reverser)
+                ImGui::TextColored({.8f,.8f,.3f,1.f}, "REV  ARMED");
         }
 
         ImGui::Separator();
@@ -1038,7 +1073,7 @@ int main(){
 
             int hudW = 220;
             ImGui::SetNextWindowPos({(float)(fw - hudW - 8), 8.f}, ImGuiCond_Always);
-            ImGui::SetNextWindowSize({(float)hudW, 330.f}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({(float)hudW, 440.f}, ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(.75f);
             ImGui::Begin("##surf", nullptr,
                 ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
@@ -1081,7 +1116,8 @@ int main(){
             surfBar("Column",   axes.elv);
             surfBar("Wheel",    axes.ail);
             surfBar("Pedals",   axes.rdr);
-            surf01 ("Thr",      axes.thr);
+            surf01 ("Thr(lev)", axes.thr);
+            surf01 ("Thr(cmd)", (float)tel.throttle);
 
             ImGui::End();
         }
@@ -1210,8 +1246,8 @@ int main(){
 
             FlyByWire::AircraftState acStNow = fdm.getStateForFBW();
 
-            // ── Velocidade ─────────────────────────────────────────────────────
-            ImGui::Text("SPD");
+            // ── Velocidade mínima (A/THR floor) ───────────────────────────────
+            ImGui::Text("VMIN");
             ImGui::SameLine(70.f);
             ImGui::SetNextItemWidth(100.f);
             ImGui::InputFloat("kt##spd", &gm.targets.speedKt, 1.f, 10.f, "%.0f");
@@ -1221,6 +1257,10 @@ int main(){
                 if (athrOn) gm.disengageThrottle();
                 else        gm.engageSpeed(acStNow, axes.thr);
             }
+            if (athrOn)
+                ImGui::TextColored({.9f,.9f,.2f,1.f},
+                    "  cmd %3.0f%%  lev %3.0f%%",
+                    gmOut.throttle[0]*100.f, axes.thr*100.f);
 
             // ── Proa ───────────────────────────────────────────────────────────
             ImGui::Text("HDG");
@@ -1245,6 +1285,32 @@ int main(){
             if (modeBtn(altOn ? "ALT SEL ON##a" : "ALT SEL##a", altOn)) {
                 if (altOn) gm.disengageVert();
                 else       gm.engageAltitude(acStNow, fbw);
+            }
+
+            // ── Vertical Speed (para Altitude Hold) ────────────────────────────
+            ImGui::Text("V/S");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(100.f);
+            ImGui::InputFloat("fpm##vs", &gm.targets.vsFpm, 100.f, 500.f, "%+.0f");
+            gm.targets.vsFpm = std::clamp(gm.targets.vsFpm, -3000.f, 3000.f);
+            ImGui::SameLine(200.f);
+            bool vsManOn = gm.targets.vsManual;
+            if (modeBtn(vsManOn ? "V/S ON##vs" : "V/S##vs", vsManOn)) {
+                if (vsManOn) {
+                    gm.targets.vsManual = false;
+                } else {
+                    gm.targets.vsFpm = acStNow.vsFpm;
+                    gm.targets.vsManual = true;
+                    // garante que alt hold está ativo para o VS fazer efeito
+                    if (gm.mode.vert != GuidanceModule::VertMode::AltitudeHold)
+                        gm.engageAltitude(acStNow, fbw);
+                    // climb power boost: se VS positivo e A/THR ativo,
+                    // sobe a base do throttle para 80% para não partir de throttle de cruzeiro
+                    if (gm.targets.vsFpm > 0.f && gm.athrEngaged())
+                        gm.setBaseThrottle(std::max(gm.getBaseThrottle(), 0.80f));
+                    else if (gm.targets.vsFpm < 0.f && gm.athrEngaged())
+                        gm.setBaseThrottle(std::min(gm.getBaseThrottle(), 0.40f));
+                }
             }
 
             ImGui::Separator();
@@ -1286,6 +1352,16 @@ int main(){
                 }
             }
 
+            ImGui::Separator();
+
+            // ── Visibilidade ───────────────────────────────────────────────────
+            ImGui::Text("VIS");
+            ImGui::SameLine(70.f);
+            ImGui::SetNextItemWidth(260.f);
+            ImGui::SliderFloat("×##vis", &viewDistScale, 1.0f, 10.0f, "%.1f×");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("RST##vis")) viewDistScale = 1.0f;
+
             ImGui::TextDisabled("F1 = fechar painel");
             ImGui::End();
         }
@@ -1295,7 +1371,7 @@ int main(){
         glfwSwapBuffers(win);
     }
 
-    sky.cleanup(); farTiles.cleanup(); closeTiles.cleanup();
+    sky.cleanup(); ultraFarTiles.cleanup(); farTiles.cleanup(); closeTiles.cleanup();
     clouds.cleanup(); airports.cleanup(); osm.cleanup(); postfx.cleanup();
     e195.cleanup(); cockpit.cleanup();
     glDeleteVertexArrays(1,&ptVAO); glDeleteBuffers(1,&ptVBO);

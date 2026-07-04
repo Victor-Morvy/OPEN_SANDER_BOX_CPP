@@ -33,6 +33,8 @@ public:
         float speedKt    = 250.f;
         float pitchDeg   = 0.f;
         float bankDeg    = 0.f;
+        float vsFpm      = 0.f;    // VS alvo manual (usado quando vsManual=true)
+        bool  vsManual   = false;  // true = usa vsFpm em vez da cascata alt→VS
     } targets;
 
     // Flight Director — ativo enquanto qualquer modo ligado
@@ -63,6 +65,10 @@ public:
     void disengageThrottle();
     void disengageAll();
 
+    // Permite forçar o throttle base (climb power boost)
+    void setBaseThrottle(float thr) { _baseThrottle = thr; }
+    float getBaseThrottle() const   { return _baseThrottle; }
+
     // FCU override: atualiza targets sem desengajar
     void overridePitch(float deg) { targets.pitchDeg = deg; }
     void overrideBank (float deg, FlyByWire& fbw) {
@@ -77,10 +83,14 @@ public:
 
 private:
     static constexpr float DISC_THRESH  = 0.15f;
-    static constexpr float MAX_VS_FPM   = 1500.f;
-    static constexpr float MAX_PITCH_AP = 8.f;
+    static constexpr float MAX_VS_FPM   = 3000.f;
+    static constexpr float MAX_PITCH_AP = 12.f;
 
     float _pitchInteg    = 0.f;
+    float _columnFilt    = 0.f;
     float _throttleInteg = 0.f;
     float _baseThrottle  = 0.f;
+    float _thrBoost      = 0.f;   // acúmulo por persistência (degrau a cada segundo)
+    float _errTimer      = 0.f;   // cronômetro para o degrau de 1 s
+    float _lastSpdErr    = 0.f;   // erro na última checagem
 };

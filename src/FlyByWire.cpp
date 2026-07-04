@@ -13,6 +13,8 @@ void FlyByWire::reset()
     _prevRollErr  = 0.f;
     _bankProt     = false;
     _prevYawRate  = 0.f;
+    _betaFilt     = 0.f;
+    _betaInteg    = 0.f;
     _initialized  = false;
 }
 
@@ -29,7 +31,8 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     // ── Throttle + reversor (passam direto para FADEC/FDM) ──────────────────
     out.throttle[0] = clamp01(inp.throttle[0]);
     out.throttle[1] = clamp01(inp.throttle[1]);
-    out.reverser    = inp.reverser;
+    // Reversor: trava de solo — só deploya com peso nas rodas (como no real)
+    out.reverser    = inp.reverser && st.wow;
 
     // ── Flaps (7 deflexões SLAT/FLAP: 0..0.75 em controls/flight/flaps) ─────
     out.flaps = clamp01(inp.flaps) * 0.75f;
@@ -160,10 +163,17 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     {
         if (st.wow) {
             // No solo: pedais diretos — beta e yaw rate são ruidosos em baixa velocidade
-            out.rudder       = clamp1(inp.pedals);
+            out.rudder  = clamp1(inp.pedals);
+            _betaFilt   = st.betaDeg;   // reseta filtro no solo
+            _betaInteg  = 0.f;
         } else {
+            // Filtro passa-baixo: atenua ruído do sinal de beta sem prejudicar resposta OEI
+            _betaFilt  = gains.betaFiltA * _betaFilt + (1.f - gains.betaFiltA) * st.betaDeg;
+            // Integrador: acumula beta residual → força final que elimina derrapagem em regime
+            _betaInteg += _betaFilt * dt;
+            _betaInteg  = std::clamp(_betaInteg, -8.f, 8.f);   // anti-windup ±8 °·s
             float yawDamp  = -gains.yawDamperK * st.yawRateDegS;
-            float betaCorr =  gains.betaKp     * st.betaDeg;
+            float betaCorr =  gains.betaKp * _betaFilt + gains.betaKi * _betaInteg;
             out.rudder     = clamp1(inp.pedals + yawDamp + betaCorr);
         }
         out.steerNoseDeg = inp.pedals * MAX_STEER_DEG;

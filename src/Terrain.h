@@ -10,6 +10,9 @@ public:
     void render(const glm::mat4& view, const glm::mat4& proj,
                 const glm::vec3& acWorldPos, float dayFactor);
     void cleanup();
+
+    float fogDensity = 0.00003f;  // densidade de fog (menor = vê mais longe)
+
 private:
     unsigned int _prog = 0, _vao = 0, _vbo = 0, _ebo = 0;
     int  _idxCount = 0;

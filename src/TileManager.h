@@ -42,6 +42,8 @@ public:
                 glm::vec3 acWorld, float acMslM,
                 const glm::vec3& sunDir, float day);
 
+    float visScale = 1.0f;  // multiplicador da distância de visibilidade (1=padrão, 5=5×)
+
     // Elevação em metros MSL na posição do avião. Retorna 0 até tiles carregarem.
     float getElevAt(glm::vec3 acWorld) const;
 

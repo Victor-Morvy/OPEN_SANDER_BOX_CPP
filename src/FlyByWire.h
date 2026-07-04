@@ -82,8 +82,10 @@ public:
         float maxRollRateDegS= 22.f;   // taxa de rolagem máxima comandada
 
         // Yaw damper + auto-rudder (coordenação de curva)
-        float yawDamperK = 0.06f;  // era 0.40 — 2.5°/s já mandava rudder cheio
-        float betaKp     = 0.02f;  // correção de beta reduzida (sinal ruidoso)
+        float yawDamperK = 0.10f;  // era 0.06 — aumentado para melhor amortecimento
+        float betaKp     = 0.20f;  // P: 5°→1.0 rudder (aumentado de 0.14)
+        float betaKi     = 0.06f;  // I: integrador elimina beta residual em regime
+        float betaFiltA  = 0.80f;  // alfa do filtro passa-baixo do beta (0=sem filtro)
     } gains;
 
     // ── Interface principal ───────────────────────────────────────────────────
@@ -130,8 +132,10 @@ private:
     float _prevRollErr  = 0.f;
     bool  _bankProt     = false;
 
-    // Yaw damper
+    // Yaw damper + beta correction
     float _prevYawRate  = 0.f;
+    float _betaFilt     = 0.f;   // beta filtrado (passa-baixo)
+    float _betaInteg    = 0.f;   // integrador de beta (elimina resíduo em regime)
 
     // Gear
     bool _gearDown      = false;

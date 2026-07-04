@@ -219,4 +219,4 @@ Executável: `build/Release/webflight.exe`
 - **FBW roll/yaw**: re-habilitar rate demand roll e yaw damper depois de estabelecer feeling do joystick
 - **Autopilot**: altitude hold + heading hold (não iniciado)
 - **Modelo 3D E195**: substituir placeholder C172P por modelo real (não iniciado)
-- **Reversor**: botão Y já mapeado em `axes.reverser`, wiring com JSBSim pendente
+- ~~Reversor~~ **feito**: toggle Y/△ ou tecla R; trava de solo no FBW (`inp.reverser && st.wow`); auto-stow em voo; HUD mostra `REV DEPLOYED`. JSBSim: `reverser-angle-rad = π` → thrust × cos(π) = −1

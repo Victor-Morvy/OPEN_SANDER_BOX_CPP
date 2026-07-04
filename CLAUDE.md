@@ -30,7 +30,7 @@ src/
 ├── FlyByWire.cpp/.h    FBW Normal Law: C* pitch / rate demand roll / yaw damper+beta
 ├── GuidanceModule.cpp  AFCS: ALT/HDG/ATT hold, A/THR, flight director
 ├── Sky.cpp/.h          shader Preetham, bloom 2-pass
-├── TileManager.cpp/.h  3 LODs AWS Terrarium elevation + ESRI texture, curvatura
+├── TileManager.cpp/.h  4 LODs AWS Terrarium elevation + ESRI texture, curvatura
 ├── Terrain.cpp/.h      mesh fallback checkerboard
 ├── Clouds.cpp/.h       nuvens billboard instanced
 ├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI
@@ -50,20 +50,23 @@ CMakeLists.txt          build: vcpkg + FetchContent JSBSim
 - `TileManager::getElevAt()` retorna MSL bruto do Terrarium; componente Y do input é ignorado.
 - `uYBias` uniform sobe/desce o mesh de terreno no espaço mundo.
 
-### Três LODs de terreno
+### Quatro LODs de terreno
 
 ```
-ultraFarTiles (zoom 7,  9×9,  vgrid 17) — ~1300 km raio — sem depth write
-farTiles      (zoom 12, 17×17, vgrid 33) — ~78 km raio  — sem depth write
-closeTiles    (zoom 15, 9×9,  vgrid 65) — ~10 km raio  — referência de altitude
+ultraFarTiles (zoom 7,  9×9,   vgrid 17) — ~1300 km raio — sem depth write
+farTiles      (zoom 12, 17×17, vgrid 33) — ~78 km raio   — sem depth write
+closeTiles    (zoom 15, 17×17, vgrid 65) — ~9.4 km raio  — sem depth write; referência de altitude (getElevAt)
+nearTiles     (zoom 17, 9×9,   vgrid 33) — ~1.3 km raio  — ÚNICA que escreve depth; 1.2 m/px no solo
 ```
 
 - **Curvatura da Terra** no TM_VERT: `world.y -= d²/(2·6371000)` — horizonte
   físico (~330 km a FL280) esconde a borda do grid; getElevAt (CPU) não é afetado
-- **Sem polygon offset**: camadas distantes com `depthWrite=false`, tiles
-  ordenados do mais distante para o mais próximo (painter). NUNCA usar polygon
-  offset com muitas unidades: 150 unidades estourava depth > 1.0 → fragmentos
-  descartados = "barreira reta" cortando o terreno a ~11 km (cockpit near=0.05)
+- **Sem polygon offset**: ordem pintor (distante → próximo), só a camada mais
+  fina escreve depth. NUNCA usar polygon offset com muitas unidades: 150
+  unidades estourava depth > 1.0 → fragmentos descartados = "barreira reta"
+  cortando o terreno a ~11 km (cockpit near=0.05)
+- **AirportManager registra flat areas nas 3 camadas finas** (close, far, near) —
+  camada nova de tiles precisa entrar em addAirportGpu/update
 - **Fog atmosférico**: `vis = max(40 km, alt×20) × visScale` — dia claro real;
   cor = earthHaze do Sky shader
 - Far clip 2000 km; near 0.5 (externa) / 0.05 (cockpit)

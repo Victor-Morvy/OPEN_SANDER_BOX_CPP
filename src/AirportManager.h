@@ -21,6 +21,16 @@ public:
     // Busca aeroporto por ident (ICAO, ex: "SBGL"). true = achou.
     bool findAirport(const std::string& ident, double& lat, double& lon) const;
 
+    // Aeroportos (com pista) num raio — para marcadores de longa distância no HUD
+    struct ApMarker {
+        std::string ident;
+        float wx, wz;      // posição world XZ [m]
+        float elevM;       // elevação MSL [m]
+        float distM;       // distância horizontal ao avião [m]
+    };
+    void getNearby(const glm::vec3& acWorld, float radiusM,
+                   std::vector<ApMarker>& out) const;
+
     void cleanup();
 
 private:

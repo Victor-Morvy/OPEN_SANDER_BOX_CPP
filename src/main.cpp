@@ -1264,6 +1264,48 @@ int main(){
             ImGui::End();
         }
 
+        // ── Marcadores de aeroportos (visíveis de longe) ──────────────────────
+        if (fdmOk) {
+            static std::vector<AirportManager::ApMarker> apMk;
+            airports.getNearby(acWorld, 250000.f, apMk);   // até 250 km
+
+            ImGuiIO&    mio = ImGui::GetIO();
+            ImDrawList* dl  = ImGui::GetBackgroundDrawList();
+            glm::mat4   VP  = proj * view;
+
+            for (const auto& m : apMk) {
+                if (m.distM < 4000.f) continue;   // perto: a pista já é visível
+                // Posição render (avião na origem) com a mesma curvatura da Terra
+                float dy = (m.distM * m.distM) / (2.f * 6371000.f);
+                glm::vec4 clip = VP * glm::vec4(m.wx - acWorld.x,
+                                                m.elevM - dy - acMslM,
+                                                m.wz - acWorld.z, 1.f);
+                if (clip.w <= 0.f) continue;      // atrás da câmera
+                float sx = (clip.x/clip.w * 0.5f + 0.5f) * mio.DisplaySize.x;
+                float sy = (1.f - (clip.y/clip.w * 0.5f + 0.5f)) * mio.DisplaySize.y;
+                if (sx < -60.f || sx > mio.DisplaySize.x + 60.f ||
+                    sy < -60.f || sy > mio.DisplaySize.y + 60.f) continue;
+
+                // Waypoint ativo do LNAV em magenta; demais em ciano
+                bool active = gm.mode.lat == GuidanceModule::LatMode::Nav &&
+                              gm.activeWpt < (int)gm.fplan.size() &&
+                              gm.fplan[gm.activeWpt].name == m.ident;
+                ImU32 col = active ? IM_COL32(255, 90, 230, 235)
+                                   : IM_COL32( 80, 220, 255, 210);
+
+                char buf[48];
+                snprintf(buf, sizeof(buf), "%s %.0f NM",
+                         m.ident.c_str(), m.distM / 1852.f);
+                // Seta apontando o aeroporto + rótulo centralizado acima
+                dl->AddTriangleFilled({sx, sy}, {sx-6.f, sy-12.f}, {sx+6.f, sy-12.f}, col);
+                ImVec2 ts = ImGui::CalcTextSize(buf);
+                dl->AddRectFilled({sx - ts.x*0.5f - 3.f, sy - 30.f},
+                                  {sx + ts.x*0.5f + 3.f, sy - 13.f},
+                                  IM_COL32(0, 0, 0, 130), 3.f);
+                dl->AddText({sx - ts.x*0.5f, sy - 29.f}, col, buf);
+            }
+        }
+
         // ── Painel AFCS Guidance (F1) ─────────────────────────────────────────
         if (guidancePanelOpen && fdmOk) {
             ImGui::SetNextWindowPos({(float)(fw/2 - 220), 10.f}, ImGuiCond_Always);

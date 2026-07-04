@@ -520,6 +520,38 @@ void AirportManager::render(const glm::mat4& VP,
     glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
+// ── getNearby ─────────────────────────────────────────────────────────────────
+
+void AirportManager::getNearby(const glm::vec3& acWorld, float radiusM,
+                               std::vector<ApMarker>& out) const
+{
+    out.clear();
+    double acLat = _originLat - acWorld.z / 111320.0;
+    double acLon = _originLon + acWorld.x / _mPerDegLon;
+
+    int cellX = (int)std::floor(acLat);
+    int cellZ = (int)std::floor(acLon);
+    int dLat  = (int)std::ceil(radiusM / 111320.0) + 1;
+    int dLon  = (int)std::ceil(radiusM / (double)_mPerDegLon) + 1;
+
+    for (int la = -dLat; la <= dLat; ++la) {
+        for (int lo = -dLon; lo <= dLon; ++lo) {
+            int64_t key = (int64_t)(cellX+la+90)*1000 + (int64_t)(cellZ+lo+180);
+            auto it = _grid.find(key);
+            if (it == _grid.end()) continue;
+            for (size_t idx : it->second) {
+                const Airport& ap = _airports[idx];
+                if (!_runways.count(ap.ident)) continue;   // só com pista
+                glm::vec2 w = toWorld(ap.lat, ap.lon);
+                float dx = w.x - acWorld.x, dz = w.y - acWorld.z;
+                float d2 = dx*dx + dz*dz;
+                if (d2 > radiusM*radiusM) continue;
+                out.push_back({ap.ident, w.x, w.y, ap.elevM, std::sqrt(d2)});
+            }
+        }
+    }
+}
+
 // ── findAirport ───────────────────────────────────────────────────────────────
 
 bool AirportManager::findAirport(const std::string& ident,

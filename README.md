@@ -118,6 +118,11 @@ Textura: ESRI World Imagery
 | Roll | ativo | Rate demand (22°/s máx) / attitude hold, bank protection 33°/67° |
 | Yaw | ativo | Yaw damper + auto-rudder PI no beta (elimina derrapagem residual) |
 
+**Reversão de leis** (tecla `L`, anunciada no HUD):
+- **NORMAL** — tudo acima
+- **ALTN** — sem proteções de envelope; estabilidade de velocidade (overspeed → nariz sobe, underspeed → nariz desce) + limites de pitch +30°/−15°
+- **DIRECT** — stick → superfície puro nos 3 eixos, sem aumentação
+
 ### AFCS (GuidanceModule) — painel F1
 
 | Modo | Lei |
@@ -145,6 +150,7 @@ Auto-desconexão de vert+lat com coluna/manche > 15%. Flight director sempre ati
 | `F` / `V` | Flaps subir / descer |
 | `G` | Trem de pouso (toggle) |
 | `R` | Reversor (toggle; só deploya no solo) |
+| `L` | Lei FBW: NORMAL → ALTN → DIRECT |
 | `Z` | Attitude Hold (toggle) |
 | `H` | Altitude Hold (toggle) |
 | `F1` | Painel AFCS Guidance |

@@ -49,7 +49,8 @@ public:
     bool depthWrite = true;
 
     // Elevação em metros MSL na posição do avião. Retorna 0 até tiles carregarem.
-    float getElevAt(glm::vec3 acWorld) const;
+    // found (opcional): true se a posição caiu dentro de um tile carregado.
+    float getElevAt(glm::vec3 acWorld, bool* found = nullptr) const;
 
     // Registra área plana sob pista; achata os vértices do mesh ao carregar tiles.
     // heading = atan2(wx2-wx1, wz2-wz1), leElev/heElev em metros MSL.

@@ -661,6 +661,20 @@ int main(){
             e1Prev = e1Now; e2Prev = e2Now;
         }
 
+        // ── Reversão de lei FBW (L: NORMAL → ALTN → DIRECT → NORMAL) ─────────
+        {
+            static bool lPrev = false;
+            bool lNow = glfwGetKey(win, GLFW_KEY_L) == GLFW_PRESS;
+            if (lNow && !lPrev) {
+                using Law = FlyByWire::Law;
+                fbw.law = (fbw.law == Law::Normal)    ? Law::Alternate
+                        : (fbw.law == Law::Alternate) ? Law::Direct
+                                                      : Law::Normal;
+                printf("[FBW] lei ativa: %s\n", fbw.lawName());
+            }
+            lPrev = lNow;
+        }
+
         // ── Guidance (Z/Select = ATT hold | H/Circle = ALT hold | F1 = painel) ─
         {
             static bool zPrev = false, hPrev = false, f1Prev = false;
@@ -742,7 +756,7 @@ int main(){
 
         // Aeroportos (precisa acMslM para PAPI)
         airports.update(acWorld, acMslM, closeTiles, farTiles);
-        // osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles); // desligado temporariamente
+        // osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles); // pesado: ~40k draw calls — precisa de batching antes de reativar
 
         if(fdmOk && !paused){
             // 1. Monta input do piloto
@@ -849,7 +863,7 @@ int main(){
         airports.render(proj*view, acWorld, acMslM, day);
 
         // 3b. OSM: prédios, estradas, água
-        // osm.render(proj*view, acWorld, day, (float)glfwGetTime()); // desligado temporariamente
+        // osm.render(proj*view, acWorld, day, (float)glfwGetTime()); // pesado: ~40k draw calls — precisa de batching antes de reativar
 
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);
@@ -1008,13 +1022,21 @@ int main(){
         ImGui::Text("Nz   %+5.2f g", tel.loadNz);
         ImGui::Text("AOA  %+5.1f°", alphaDeg);
 
-        // Status proteções
+        // Lei ativa (L = ciclar NORMAL → ALTN → DIRECT)
+        switch (fbw.law) {
+            case FlyByWire::Law::Normal:
+                ImGui::TextColored({.3f,1.f,.3f,1.f}, "FBW NORMAL");     break;
+            case FlyByWire::Law::Alternate:
+                ImGui::TextColored({1.f,.8f,.2f,1.f}, "FBW ALTN");       break;
+            default:
+                ImGui::TextColored({1.f,.3f,.3f,1.f}, "FBW DIRECT");     break;
+        }
+
+        // Status proteções (apenas Normal Law)
         if(fbw.alphaFloorActive())
             ImGui::TextColored({1.f,.3f,.3f,1.f}, "!! ALPHA FLOOR");
         else if(fbw.bankProtActive())
             ImGui::TextColored({1.f,.8f,.2f,1.f}, "!! BANK PROT");
-        else
-            ImGui::TextColored({.3f,1.f,.3f,1.f}, "Normal Law");
 
         ImGui::Text("C*  dem%+5.2f act%+5.2f", fbw.cstarDemand(), fbw.cstarActual());
         ImGui::Text("Elev integ %+5.3f", fbw.elevInteg());

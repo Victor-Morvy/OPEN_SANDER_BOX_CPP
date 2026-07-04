@@ -60,7 +60,14 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     //    · pushback proporcional (Kp=0.02) quando stick está neutro (|col|<0.05)
     //    · piloto com stick ativo sempre tem autoridade total (proteção é "soft")
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    {
+    if (law == Law::Direct) {
+        // ── DIRECT LAW: stick → profundor, ganho fixo, sem aumentação ─────────
+        out.elevLH = out.elevRH = clamp1(-inp.column);
+        _elevInteg    = 0.f;
+        _prevPitchErr = 0.f;
+        _initialized  = false;
+        _alphaFloor   = false;
+    } else {
         float q_rps = st.pitchRateDegS * DEG2RAD;
         _cstarAct = st.loadFactorNz + gains.cstarK * q_rps;
 
@@ -70,17 +77,38 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             _initialized  = true;
         }
 
-        // Pitch envelope: pushback no column quando além dos limites e stick neutro
         float columnMod = inp.column;
-        if (st.altAgl > 200.f) {
-            constexpr float PITCH_CEIL  = 30.f, PITCH_FLOOR = -15.f;
-            constexpr float ENV_KP = 0.02f,  ENV_DZ = 0.05f;
-            if (std::abs(columnMod) < ENV_DZ) {
-                if (st.pitchDeg > PITCH_CEIL)
-                    columnMod -= std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
-                else if (st.pitchDeg < PITCH_FLOOR)
-                    columnMod += std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
+
+        if (law == Law::Normal) {
+            // Pitch envelope: pushback no column quando além dos limites e stick neutro
+            if (st.altAgl > 200.f) {
+                constexpr float PITCH_CEIL  = 30.f, PITCH_FLOOR = -15.f;
+                constexpr float ENV_KP = 0.02f,  ENV_DZ = 0.05f;
+                if (std::abs(columnMod) < ENV_DZ) {
+                    if (st.pitchDeg > PITCH_CEIL)
+                        columnMod -= std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
+                    else if (st.pitchDeg < PITCH_FLOOR)
+                        columnMod += std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
+                }
             }
+        } else {
+            // ── ALTERNATE LAW: sem proteções de envelope; no lugar: ───────────
+            // Estabilidade de velocidade (soft, atua mesmo com stick ativo):
+            //   overspeed  → comanda nariz para cima (reduz velocidade)
+            //   underspeed → comanda nariz para baixo (recupera velocidade)
+            if (st.casKt > gains.altVHi)
+                columnMod += std::min(0.5f, gains.altSpdK * (st.casKt - gains.altVHi));
+            else if (st.casKt < gains.altVLo)
+                columnMod -= std::min(0.5f, gains.altSpdK * (gains.altVLo - st.casKt));
+
+            // Limites de pitch +30° / −15° (pushback proporcional, mesmo com stick)
+            constexpr float ALT_CEIL = 30.f, ALT_FLOOR = -15.f;
+            if (st.pitchDeg > ALT_CEIL)
+                columnMod -= std::clamp(gains.altPitchK * (st.pitchDeg - ALT_CEIL),  0.f, 0.8f);
+            else if (st.pitchDeg < ALT_FLOOR)
+                columnMod += std::clamp(gains.altPitchK * (ALT_FLOOR - st.pitchDeg), 0.f, 0.8f);
+
+            columnMod = std::clamp(columnMod, -1.f, 1.f);
         }
 
         // Em terra: elevator neutro — C* sem sentido com aeronave parada no chão
@@ -116,7 +144,13 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     //                 Proteção: se banco > 33°, retorna a 33°
     //  Limite rígido: 67° (BANK_NORM_LIM) — trava o aileron que aprofundaria
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    {
+    if (law == Law::Direct) {
+        // ── DIRECT LAW: stick → aileron, ganho fixo ───────────────────────────
+        out.aileronL =  clamp1(inp.wheel);
+        out.aileronR = -clamp1(inp.wheel);
+        _targetBank  = st.rollDeg;
+        _bankProt    = false;
+    } else {
         float ailCmd;
 
         if (std::abs(inp.wheel) > ROLL_DEADBAND) {
@@ -129,7 +163,8 @@ void FlyByWire::update(float dt, const PilotInput& inp,
         } else {
             // Attitude hold: cascata banco → taxa → aileron (sem derivativo)
             float target = _targetBank;
-            if (std::abs(target) > BANK_HOLD_LIM) {
+            if (law == Law::Normal && std::abs(target) > BANK_HOLD_LIM) {
+                // Proteção: acima de 33° retorna a 33° (apenas Normal Law)
                 target    = std::copysign(BANK_HOLD_LIM, target);
                 _bankProt = true;
             } else {
@@ -143,8 +178,8 @@ void FlyByWire::update(float dt, const PilotInput& inp,
         }
         _prevRollErr = 0.f;  // não usado mais, mantido para compatibilidade do reset()
 
-        // Limite rígido em 67°: bloqueia aileron que aprofundaria além do limite
-        if (std::abs(st.rollDeg) >= BANK_NORM_LIM) {
+        // Limite rígido em 67° (apenas Normal Law)
+        if (law == Law::Normal && std::abs(st.rollDeg) >= BANK_NORM_LIM) {
             float sign = (st.rollDeg > 0.f) ? 1.f : -1.f;
             if (ailCmd * sign > 0.f) ailCmd = 0.f;
         }
@@ -161,10 +196,10 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     //  Steering do nariz usa apenas o sinal direto dos pedais (sem damper)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
-        if (st.wow) {
-            // No solo: pedais diretos — beta e yaw rate são ruidosos em baixa velocidade
+        if (st.wow || law == Law::Direct) {
+            // No solo ou Direct Law: pedais diretos, sem aumentação
             out.rudder  = clamp1(inp.pedals);
-            _betaFilt   = st.betaDeg;   // reseta filtro no solo
+            _betaFilt   = st.betaDeg;   // reseta filtro
             _betaInteg  = 0.f;
         } else {
             // Filtro passa-baixo: atenua ruído do sinal de beta sem prejudicar resposta OEI

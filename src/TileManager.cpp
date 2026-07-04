@@ -506,7 +506,8 @@ void TileManager::render(const glm::mat4& VP,
     if(!depthWrite) glDepthMask(GL_TRUE);
 }
 
-float TileManager::getElevAt(glm::vec3 acWorld) const{
+float TileManager::getElevAt(glm::vec3 acWorld, bool* found) const{
+    if(found) *found=false;
     for(auto& [key,g]:_gpu){
         float dx=acWorld.x-g.worldX;
         float dz=acWorld.z-g.worldZ;
@@ -518,6 +519,7 @@ float TileManager::getElevAt(glm::vec3 acWorld) const{
             float fu=u-ix, fv=v-iy;
             float e00=g.elev[iy*N+ix],   e10=g.elev[iy*N+ix+1];
             float e01=g.elev[(iy+1)*N+ix],e11=g.elev[(iy+1)*N+ix+1];
+            if(found) *found=true;
             return e00*(1-fu)*(1-fv)+e10*fu*(1-fv)+e01*(1-fu)*fv+e11*fu*fv;
         }
     }

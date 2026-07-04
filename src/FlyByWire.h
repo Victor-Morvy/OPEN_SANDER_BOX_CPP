@@ -8,14 +8,27 @@
 // produz comandos de superfícies normalizados. Totalmente reutilizável para
 // autopiloto / testador / calibrador automático.
 //
-// Leis implementadas:
-//   Arfagem  — C* (fator de carga + taxa de arfagem blend)
-//   Rolagem  — Rate demand / attitude hold com bank angle protection
-//   Guinada  — Pedais diretos + yaw damper ativo
-//   Proteção — Alpha floor, overspeed, bank limit 67°
+// Leis implementadas (com reversão Normal → Alternate → Direct):
+//   NORMAL    — C* pitch + envelope, rate demand roll + bank protection,
+//               yaw damper + auto-rudder beta
+//   ALTERNATE — mesmas leis SEM proteções de envelope; no lugar:
+//               estabilidade de velocidade (overspeed → nariz sobe,
+//               underspeed → nariz desce) e limites de pitch +30°/−15°
+//   DIRECT    — stick → superfície puro (ganho fixo), sem aumentação
 
 class FlyByWire {
 public:
+    // ── Lei ativa (reversão) ──────────────────────────────────────────────────
+    enum class Law { Normal, Alternate, Direct };
+    Law law = Law::Normal;
+
+    const char* lawName() const {
+        switch (law) {
+            case Law::Normal:    return "NORMAL";
+            case Law::Alternate: return "ALTN";
+            default:             return "DIRECT";
+        }
+    }
     // ── Entradas do piloto ────────────────────────────────────────────────────
     struct PilotInput {
         float column    = 0.f;        // arfagem:  puxar+ / empurrar- [-1..+1]
@@ -86,6 +99,12 @@ public:
         float betaKp     = 0.20f;  // P: 5°→1.0 rudder (aumentado de 0.14)
         float betaKi     = 0.06f;  // I: integrador elimina beta residual em regime
         float betaFiltA  = 0.80f;  // alfa do filtro passa-baixo do beta (0=sem filtro)
+
+        // Alternate Law: estabilidade de velocidade + limites de pitch
+        float altVHi     = 330.f;   // kt — acima disso, comanda nariz para cima
+        float altVLo     = 160.f;   // kt — abaixo disso, comanda nariz para baixo
+        float altSpdK    = 0.008f;  // column por kt além do limiar (soft, ±0.5 máx)
+        float altPitchK  = 0.04f;   // pushback por grau além de +30°/−15°
     } gains;
 
     // ── Interface principal ───────────────────────────────────────────────────

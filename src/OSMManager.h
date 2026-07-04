@@ -38,8 +38,7 @@ private:
         MeshType type;
         glm::vec3 flatColor{1,1,1};
         int      facadeVariant=0;
-        float    baseY=0.f;          // terrain elevation at centroid (added in shader)
-        glm::vec2 centroidXZ{0,0};   // world XZ for elevation re-sampling
+        // Elevação MSL é assada (bake) nos vértices no upload — sem uBaseY runtime
     };
 
     // ── CPU raw mesh (built on bg thread, no GL calls) ────────────────────────
@@ -55,6 +54,7 @@ private:
 
     // ── State ─────────────────────────────────────────────────────────────────
     std::vector<GpuMesh> _meshes;
+    std::vector<RawMesh> _staging;   // fila main-thread: upload amortizado N/frame
     std::thread          _thread;
     std::mutex           _mutex;
     std::atomic<int>     _gen{0};
@@ -78,6 +78,8 @@ private:
     void      clearMeshes();
     void      uploadPending(TileManager& close, TileManager& far_);
     void      uploadMesh(GpuMesh& g, const RawMesh& r);
+    // Assa elevação MSL nos vértices. false = terreno ainda não carregado (adia).
+    bool      bakeElevation(RawMesh& r, TileManager& close, TileManager& far_);
 
     void  fetchAsync(double lat, double lon, int gen);
     void  buildGeometry(const std::string& json, int gen, RawBatch& out);

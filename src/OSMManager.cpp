@@ -26,12 +26,13 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
 uniform mat4  uVP;
-uniform float uBaseY;
 uniform vec3  uAcPos;
 out vec3 vNormal;
 out vec2 vUV;
 void main(){
-    vec3 world = vec3(aPos.x, aPos.y + uBaseY + 0.3, aPos.z);
+    vec3 world = aPos;   // elevação MSL já assada nos vértices
+    vec2 dxz = world.xz - uAcPos.xz;
+    world.y -= dot(dxz, dxz) / (2.0 * 6371000.0);  // curvatura da Terra
     gl_Position = uVP * vec4(world - uAcPos, 1.0);
     vNormal = aNormal;
     vUV = aUV;
@@ -57,10 +58,11 @@ static const char* FLAT_VERT = R"glsl(
 #version 330 core
 layout(location=0) in vec3 aPos;
 uniform mat4  uVP;
-uniform float uBaseY;
 uniform vec3  uAcPos;
 void main(){
-    vec3 world = vec3(aPos.x, aPos.y + uBaseY + 0.3, aPos.z);
+    vec3 world = aPos;   // elevação MSL já assada nos vértices
+    vec2 dxz = world.xz - uAcPos.xz;
+    world.y -= dot(dxz, dxz) / (2.0 * 6371000.0);  // curvatura da Terra
     gl_Position = uVP * vec4(world - uAcPos, 1.0);
 }
 )glsl";
@@ -79,12 +81,14 @@ static const char* WATER_VERT = R"glsl(
 #version 330 core
 layout(location=0) in vec3 aPos;
 uniform mat4  uVP;
-uniform float uBaseY;
 uniform vec3  uAcPos;
 out vec3 vWorld;
 void main(){
-    vWorld      = vec3(aPos.x, aPos.y + uBaseY, aPos.z);
-    gl_Position = uVP * vec4(vWorld - uAcPos, 1.0);
+    vWorld = aPos;   // elevação MSL já assada nos vértices
+    vec3 world = vWorld;
+    vec2 dxz = world.xz - uAcPos.xz;
+    world.y -= dot(dxz, dxz) / (2.0 * 6371000.0);  // curvatura da Terra
+    gl_Position = uVP * vec4(world - uAcPos, 1.0);
 }
 )glsl";
 
@@ -264,19 +268,8 @@ static constexpr double CELL_DEG = 0.08;  // ~8.9 km — bbox 0.16°×0.16° (~1
 
 void OSMManager::update(double acLat, double acLon,
                         TileManager& close, TileManager& far_) {
-    // Upload batch in chunks to avoid single-frame GL stall
+    // Upload amortizado: N meshes por frame (sem stall de frame único)
     uploadPending(close, far_);
-
-    // Retry baseY only for meshes that got 0 at upload time (tile not loaded yet).
-    // Once a mesh has a valid elevation, never change it — avoids jitter from
-    // tile-boundary bilinear differences.
-    for (auto& m : _meshes) {
-        if (m.baseY != 0.f) continue;
-        glm::vec3 cPos{m.centroidXZ.x, 0.f, m.centroidXZ.y};
-        float e = close.getElevAt(cPos);
-        if (e == 0.f) e = far_.getElevAt(cPos);
-        if (e != 0.f) m.baseY = e;
-    }
 
     int cx = (int)std::floor(acLat / CELL_DEG);
     int cz = (int)std::floor(acLon / CELL_DEG);
@@ -301,31 +294,82 @@ void OSMManager::clearMeshes() {
         if (m.ibo) glDeleteBuffers(1, &m.ibo);
     }
     _meshes.clear();
+    _staging.clear();   // descarta meshes da célula antiga ainda não subidos
 }
 
 // ── uploadPending (main thread) ───────────────────────────────────────────────
 
-void OSMManager::uploadPending(TileManager& close, TileManager& far_) {
-    std::lock_guard<std::mutex> lk(_mutex);
-    if (!_hasPending) return;
-    _hasPending = false;
+// Assa a elevação MSL do terreno nos vértices (main thread, tiles carregados).
+// Prédios/água: um nível único (centróide) — a base fica plana como na realidade.
+// Estradas: elevação por vértice — a via acompanha o relevo.
+// Retorna false se o terreno ainda não carregou nesta posição (adia o mesh).
+bool OSMManager::bakeElevation(RawMesh& r, TileManager& close, TileManager& far_) {
+    auto sample = [&](float x, float z, float& out) -> bool {
+        bool ok = false;
+        glm::vec3 p{x, 0.f, z};
+        float e = close.getElevAt(p, &ok);
+        if (!ok) e = far_.getElevAt(p, &ok);
+        if (ok) out = e;
+        return ok;
+    };
 
-    for (auto& r : _pending.meshes) {
-        GpuMesh g;
-        g.type          = r.type;
-        g.flatColor     = r.flatColor;
-        g.facadeVariant = r.facadeVariant;
-        g.centroidXZ    = r.centroidXZ;
+    const size_t stride = (r.type == BLDWALL) ? 8 : 3;
+    constexpr float LIFT = 0.3f;   // evita z-fighting com o terreno
 
-        glm::vec3 cPos{r.centroidXZ.x, 0.f, r.centroidXZ.y};
-        g.baseY = close.getElevAt(cPos);
-        if (g.baseY == 0.f) g.baseY = far_.getElevAt(cPos);
-
-        uploadMesh(g, r);
-        _meshes.push_back(g);
+    if (r.type == ROAD) {
+        // Por vértice: primeiro verifica todos, depois aplica (tudo-ou-nada).
+        // Os vértices de estrada já trazem lift de 0.3 no Y — soma só a elevação.
+        std::vector<float> elev(r.verts.size() / stride);
+        for (size_t i = 0, v = 0; i < r.verts.size(); i += stride, ++v)
+            if (!sample(r.verts[i], r.verts[i+2], elev[v])) return false;
+        for (size_t i = 0, v = 0; i < r.verts.size(); i += stride, ++v)
+            r.verts[i+1] += elev[v];
+        return true;
     }
-    _pending.meshes.clear();
-    printf("[OSM] uploaded %zu meshes\n", _meshes.size());
+
+    // Prédios/telhados/água: nível único no centróide
+    float e = 0.f;
+    if (!sample(r.centroidXZ.x, r.centroidXZ.y, e)) return false;
+    float lift = (r.type == WATER) ? 0.1f : LIFT;
+    for (size_t i = 1; i < r.verts.size(); i += stride)
+        r.verts[i] += e + lift;
+    return true;
+}
+
+void OSMManager::uploadPending(TileManager& close, TileManager& far_) {
+    // Move o batch da thread de fetch para a fila de staging (main thread)
+    {
+        std::lock_guard<std::mutex> lk(_mutex);
+        if (_hasPending) {
+            _hasPending = false;
+            for (auto& m : _pending.meshes) _staging.push_back(std::move(m));
+            _pending.meshes.clear();
+        }
+    }
+    if (_staging.empty()) return;
+
+    // Upload amortizado: no máx N meshes por frame. Meshes cujo terreno ainda
+    // não carregou ficam na fila e são re-tentados nos frames seguintes.
+    constexpr int MAX_PER_FRAME = 200;
+    int uploaded = 0;
+    for (size_t i = 0; i < _staging.size() && uploaded < MAX_PER_FRAME; ) {
+        if (!bakeElevation(_staging[i], close, far_)) { ++i; continue; }
+
+        GpuMesh g;
+        g.type          = _staging[i].type;
+        g.flatColor     = _staging[i].flatColor;
+        g.facadeVariant = _staging[i].facadeVariant;
+        uploadMesh(g, _staging[i]);
+        _meshes.push_back(g);
+        ++uploaded;
+
+        // swap-erase (ordem irrelevante)
+        _staging[i] = std::move(_staging.back());
+        _staging.pop_back();
+    }
+
+    if (uploaded > 0 && _staging.empty())
+        printf("[OSM] upload completo: %zu meshes\n", _meshes.size());
 }
 
 void OSMManager::uploadMesh(GpuMesh& g, const RawMesh& r) {
@@ -371,10 +415,11 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
     if (_meshes.empty()) return;
     glDisable(GL_CULL_FACE);
 
-    // Polygon offset: empurra OSM geometry para a câmera para ganhar
-    // o depth test contra o terrain mesh (evita z-fighting).
+    // Polygon offset PEQUENO: poucas unidades bastam para vencer o terreno.
+    // (-50 unidades estourava o depth em distância — mesma classe de bug da
+    // "barreira reta" do terreno, em reverso.)
     glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(-1.f, -50.f);
+    glPolygonOffset(-1.f, -3.f);
 
     // ── Building walls ────────────────────────────────────────────────────────
     glUseProgram(_wallProg);
@@ -382,13 +427,10 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
                        glm::value_ptr(VP));
     glUniform1f(glGetUniformLocation(_wallProg, "uDay"), dayT);
     glUniform3fv(glGetUniformLocation(_wallProg, "uAcPos"), 1, glm::value_ptr(camPos));
-    GLint wallBaseY = glGetUniformLocation(_wallProg, "uBaseY");
-    GLint wallTex   = glGetUniformLocation(_wallProg, "uTex");
-    glUniform1i(wallTex, 0);
+    glUniform1i(glGetUniformLocation(_wallProg, "uTex"), 0);
 
     for (auto& m : _meshes) {
         if (m.type != BLDWALL || m.indexCount == 0) continue;
-        glUniform1f(wallBaseY, m.baseY);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, _facadeTex[m.facadeVariant]);
         glBindVertexArray(m.vao);
@@ -401,12 +443,10 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
                        glm::value_ptr(VP));
     glUniform1f(glGetUniformLocation(_flatProg, "uDay"), dayT);
     glUniform3fv(glGetUniformLocation(_flatProg, "uAcPos"), 1, glm::value_ptr(camPos));
-    GLint flatBaseY = glGetUniformLocation(_flatProg, "uBaseY");
     GLint flatColor = glGetUniformLocation(_flatProg, "uColor");
 
     for (auto& m : _meshes) {
         if ((m.type != BLDROOF && m.type != ROAD) || m.indexCount == 0) continue;
-        glUniform1f(flatBaseY, m.baseY);
         glUniform3fv(flatColor, 1, glm::value_ptr(m.flatColor));
         glBindVertexArray(m.vao);
         glDrawElements(GL_TRIANGLES, (GLsizei)m.indexCount, GL_UNSIGNED_INT, nullptr);

@@ -240,21 +240,23 @@ Executável: `build/Release/webflight.exe`
 
 ## Pendências
 
-- **FBW Alternate Law (reversão)**: modo de reversão que remove TODAS as
-  proteções do Normal Law (alpha floor, bank protection, pitch envelope) e no
-  lugar adiciona:
-  - **Proteção de velocidade**: overspeed → puxa o nariz para cima; underspeed
-    → baixa o nariz (estabilidade de alta/baixa velocidade, sem hard limits)
-  - **Limites de pitch**: máx +30° pitch up, mín −15° pitch down
-  - Precisa de: enum de lei ativa (Normal/Alternate) no FlyByWire, gatilho de
-    reversão (falha/tecla), anúncio no HUD
-- **OSM altitude bug**: bake MSL elevation nos vértices em build-time (ao invés de `uBaseY` runtime); reativar update/render sem freeze de upload
+- **OSM batching**: altitude (bake nos vértices), upload amortizado (200/frame) e
+  curvatura JÁ estão implementados no OSMManager — mas render é 1 draw call por
+  mesh (~40k/frame) e ficou pesado. Falta agrupar por tipo em VBOs grandes:
+  paredes por variante de fachada (5 grupos), telhados+estradas com cor por
+  vértice (1 grupo), água (1 grupo) → ~7 draw calls. Reativar update/render no
+  main.cpp depois do batching.
 - **Modelo 3D E195**: substituir placeholder C172P (`data/models/erj195_parts.json` + OBJs já existem)
 - **Luzes da aeronave**: nav lights, strobe, landing lights
 - **Oclusão de objetos distantes**: terreno far/ultraFar não escreve depth — nuvens/luzes de aeroporto a 20+ km podem aparecer na frente de morros que deveriam ocluí-los (raro em cruzeiro)
 
 ## Feito (não re-implementar)
 
+- **Reversão de lei FBW** (tecla L cicla NORMAL → ALTN → DIRECT; HUD anuncia):
+  - Normal: C* + envelope, rate demand + bank protection, damper + beta
+  - Alternate: sem proteções; estabilidade de velocidade (>330 kt nariz sobe,
+    <160 kt nariz desce, `altSpdK`) + limites de pitch +30°/−15° (`altPitchK`)
+  - Direct: stick → superfície puro nos 3 eixos, sem aumentação
 - **Reversor**: toggle Y/△ ou tecla R; trava de solo no FBW (`inp.reverser && st.wow`); auto-stow em voo; HUD `REV DEPLOYED`. JSBSim: `reverser-angle-rad = π` → thrust × cos(π) = −1
 - **AFCS completo** (GuidanceModule): ALT/HDG/ATT hold, A/THR, flight director, painel F1
 - **FBW roll/yaw**: rate demand + attitude hold roll, yaw damper + beta PI

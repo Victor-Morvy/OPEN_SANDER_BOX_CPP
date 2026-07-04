@@ -235,6 +235,20 @@ Trim incremental: `JT = 0.25f` unidades/s enquanto botão pressionado.
 
 ---
 
+## AFCS como projeto independente (afcs/)
+
+`afcs/` compila FlyByWire+GuidanceModule como lib estática SEM dependências
+(só C++17) + suíte de testes offline (`afcs_test`, 12 asserções: estabilidade
+de velocidade por configuração, chattering, LNAV, FLCH subida/descida).
+Documentação completa da API/ganhos em `afcs/README.md`. Um esqueleto
+`AutopilotModule` (padrão AbstractModule, wiring pendente) foi criado no
+E195-E2Sim em `apps/E195-E2Sim/src/modules/afcs/`.
+
+```bash
+cd afcs && cmake -B build -S . && cmake --build build --config Release
+build/Release/afcs_test.exe
+```
+
 ## Comandos de build
 
 ```bash

@@ -79,37 +79,28 @@ void FlyByWire::update(float dt, const PilotInput& inp,
 
         float columnMod = inp.column;
 
-        if (law == Law::Normal) {
-            // Pitch envelope: pushback no column quando além dos limites e stick neutro
-            if (st.altAgl > 200.f) {
-                constexpr float PITCH_CEIL  = 30.f, PITCH_FLOOR = -15.f;
-                constexpr float ENV_KP = 0.02f,  ENV_DZ = 0.05f;
-                if (std::abs(columnMod) < ENV_DZ) {
-                    if (st.pitchDeg > PITCH_CEIL)
-                        columnMod -= std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
-                    else if (st.pitchDeg < PITCH_FLOOR)
-                        columnMod += std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
-                }
+        // Pitch envelope: pushback no column quando além dos limites e stick neutro
+        if (st.altAgl > 200.f) {
+            constexpr float PITCH_CEIL  = 30.f, PITCH_FLOOR = -15.f;
+            constexpr float ENV_KP = 0.02f,  ENV_DZ = 0.05f;
+            if (std::abs(columnMod) < ENV_DZ) {
+                if (st.pitchDeg > PITCH_CEIL)
+                    columnMod -= std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
+                else if (st.pitchDeg < PITCH_FLOOR)
+                    columnMod += std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
             }
-        } else {
-            // ── ALTERNATE LAW: sem proteções de envelope; no lugar: ───────────
-            // Estabilidade de velocidade (soft, atua mesmo com stick ativo):
-            //   overspeed  → comanda nariz para cima (reduz velocidade)
-            //   underspeed → comanda nariz para baixo (recupera velocidade)
-            if (st.casKt > gains.altVHi)
-                columnMod += std::min(0.5f, gains.altSpdK * (st.casKt - gains.altVHi));
-            else if (st.casKt < gains.altVLo)
-                columnMod -= std::min(0.5f, gains.altSpdK * (gains.altVLo - st.casKt));
-
-            // Limites de pitch +30° / −15° (pushback proporcional, mesmo com stick)
-            constexpr float ALT_CEIL = 30.f, ALT_FLOOR = -15.f;
-            if (st.pitchDeg > ALT_CEIL)
-                columnMod -= std::clamp(gains.altPitchK * (st.pitchDeg - ALT_CEIL),  0.f, 0.8f);
-            else if (st.pitchDeg < ALT_FLOOR)
-                columnMod += std::clamp(gains.altPitchK * (ALT_FLOOR - st.pitchDeg), 0.f, 0.8f);
-
-            columnMod = std::clamp(columnMod, -1.f, 1.f);
         }
+
+        // Estabilidade de velocidade (soft, atua mesmo com stick ativo):
+        //   overspeed  (>330 kt)            → comanda nariz para cima
+        //   underspeed (<150 kt e gear UP)  → comanda nariz para baixo
+        //   (com gear DOWN não empurra o nariz — aproximação/pouso é lento por natureza)
+        if (st.casKt > gains.spdVHi)
+            columnMod += std::min(0.5f, gains.spdStabK * (st.casKt - gains.spdVHi));
+        else if (st.casKt < gains.spdVLo && !inp.gearCmd)
+            columnMod -= std::min(0.5f, gains.spdStabK * (gains.spdVLo - st.casKt));
+
+        columnMod = std::clamp(columnMod, -1.f, 1.f);
 
         // Em terra: elevator neutro — C* sem sentido com aeronave parada no chão
         if (st.wow) {

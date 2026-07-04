@@ -252,10 +252,11 @@ Executável: `build/Release/webflight.exe`
 
 ## Feito (não re-implementar)
 
-- **Reversão de lei FBW** (tecla L cicla NORMAL → ALTN → DIRECT; HUD anuncia):
-  - Normal: C* + envelope, rate demand + bank protection, damper + beta
-  - Alternate: sem proteções; estabilidade de velocidade (>330 kt nariz sobe,
-    <160 kt nariz desce, `altSpdK`) + limites de pitch +30°/−15° (`altPitchK`)
+- **Reversão de lei FBW** (tecla L alterna NORMAL ↔ DIRECT; HUD anuncia).
+  O E195-E2 tem SÓ duas leis — não existe Alternate:
+  - Normal: C* + envelope (+30°/−15°), rate demand + bank protection, damper +
+    beta, e estabilidade de velocidade: >330 kt nariz sobe; <150 kt COM GEAR UP
+    nariz desce (gear down não empurra — pouso é lento por natureza)
   - Direct: stick → superfície puro nos 3 eixos, sem aumentação
 - **Reversor**: toggle Y/△ ou tecla R; trava de solo no FBW (`inp.reverser && st.wow`); auto-stow em voo; HUD `REV DEPLOYED`. JSBSim: `reverser-angle-rad = π` → thrust × cos(π) = −1
 - **AFCS completo** (GuidanceModule): ALT/HDG/ATT hold, A/THR, flight director, painel F1

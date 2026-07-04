@@ -118,9 +118,8 @@ Textura: ESRI World Imagery
 | Roll | ativo | Rate demand (22°/s máx) / attitude hold, bank protection 33°/67° |
 | Yaw | ativo | Yaw damper + auto-rudder PI no beta (elimina derrapagem residual) |
 
-**Reversão de leis** (tecla `L`, anunciada no HUD):
-- **NORMAL** — tudo acima
-- **ALTN** — sem proteções de envelope; estabilidade de velocidade (overspeed → nariz sobe, underspeed → nariz desce) + limites de pitch +30°/−15°
+**Reversão de leis** (tecla `L`, anunciada no HUD — o E195-E2 tem apenas duas):
+- **NORMAL** — tudo acima + estabilidade de velocidade: overspeed (>330 kt) → nariz sobe; underspeed (<150 kt com gear up) → nariz desce
 - **DIRECT** — stick → superfície puro nos 3 eixos, sem aumentação
 
 ### AFCS (GuidanceModule) — painel F1
@@ -150,7 +149,7 @@ Auto-desconexão de vert+lat com coluna/manche > 15%. Flight director sempre ati
 | `F` / `V` | Flaps subir / descer |
 | `G` | Trem de pouso (toggle) |
 | `R` | Reversor (toggle; só deploya no solo) |
-| `L` | Lei FBW: NORMAL → ALTN → DIRECT |
+| `L` | Lei FBW: NORMAL ↔ DIRECT |
 | `Z` | Attitude Hold (toggle) |
 | `H` | Altitude Hold (toggle) |
 | `F1` | Painel AFCS Guidance |

@@ -661,15 +661,13 @@ int main(){
             e1Prev = e1Now; e2Prev = e2Now;
         }
 
-        // ── Reversão de lei FBW (L: NORMAL → ALTN → DIRECT → NORMAL) ─────────
+        // ── Reversão de lei FBW (L: NORMAL ↔ DIRECT) ─────────────────────────
         {
             static bool lPrev = false;
             bool lNow = glfwGetKey(win, GLFW_KEY_L) == GLFW_PRESS;
             if (lNow && !lPrev) {
                 using Law = FlyByWire::Law;
-                fbw.law = (fbw.law == Law::Normal)    ? Law::Alternate
-                        : (fbw.law == Law::Alternate) ? Law::Direct
-                                                      : Law::Normal;
+                fbw.law = (fbw.law == Law::Normal) ? Law::Direct : Law::Normal;
                 printf("[FBW] lei ativa: %s\n", fbw.lawName());
             }
             lPrev = lNow;
@@ -1022,15 +1020,11 @@ int main(){
         ImGui::Text("Nz   %+5.2f g", tel.loadNz);
         ImGui::Text("AOA  %+5.1f°", alphaDeg);
 
-        // Lei ativa (L = ciclar NORMAL → ALTN → DIRECT)
-        switch (fbw.law) {
-            case FlyByWire::Law::Normal:
-                ImGui::TextColored({.3f,1.f,.3f,1.f}, "FBW NORMAL");     break;
-            case FlyByWire::Law::Alternate:
-                ImGui::TextColored({1.f,.8f,.2f,1.f}, "FBW ALTN");       break;
-            default:
-                ImGui::TextColored({1.f,.3f,.3f,1.f}, "FBW DIRECT");     break;
-        }
+        // Lei ativa (L = alternar NORMAL ↔ DIRECT)
+        if (fbw.law == FlyByWire::Law::Normal)
+            ImGui::TextColored({.3f,1.f,.3f,1.f}, "FBW NORMAL");
+        else
+            ImGui::TextColored({1.f,.3f,.3f,1.f}, "FBW DIRECT");
 
         // Status proteções (apenas Normal Law)
         if(fbw.alphaFloorActive())

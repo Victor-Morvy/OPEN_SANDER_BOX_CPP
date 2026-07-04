@@ -8,26 +8,21 @@
 // produz comandos de superfícies normalizados. Totalmente reutilizável para
 // autopiloto / testador / calibrador automático.
 //
-// Leis implementadas (com reversão Normal → Alternate → Direct):
-//   NORMAL    — C* pitch + envelope, rate demand roll + bank protection,
-//               yaw damper + auto-rudder beta
-//   ALTERNATE — mesmas leis SEM proteções de envelope; no lugar:
-//               estabilidade de velocidade (overspeed → nariz sobe,
-//               underspeed → nariz desce) e limites de pitch +30°/−15°
-//   DIRECT    — stick → superfície puro (ganho fixo), sem aumentação
+// Leis implementadas (E195-E2 tem apenas duas — reversão Normal ↔ Direct):
+//   NORMAL — C* pitch + envelope (+30°/−15°), rate demand roll + bank
+//            protection, yaw damper + auto-rudder beta, e estabilidade de
+//            velocidade: overspeed (>330 kt) → nariz sobe; underspeed
+//            (<150 kt com gear UP) → nariz desce
+//   DIRECT — stick → superfície puro (ganho fixo), sem aumentação
 
 class FlyByWire {
 public:
     // ── Lei ativa (reversão) ──────────────────────────────────────────────────
-    enum class Law { Normal, Alternate, Direct };
+    enum class Law { Normal, Direct };
     Law law = Law::Normal;
 
     const char* lawName() const {
-        switch (law) {
-            case Law::Normal:    return "NORMAL";
-            case Law::Alternate: return "ALTN";
-            default:             return "DIRECT";
-        }
+        return law == Law::Normal ? "NORMAL" : "DIRECT";
     }
     // ── Entradas do piloto ────────────────────────────────────────────────────
     struct PilotInput {
@@ -100,11 +95,10 @@ public:
         float betaKi     = 0.06f;  // I: integrador elimina beta residual em regime
         float betaFiltA  = 0.80f;  // alfa do filtro passa-baixo do beta (0=sem filtro)
 
-        // Alternate Law: estabilidade de velocidade + limites de pitch
-        float altVHi     = 330.f;   // kt — acima disso, comanda nariz para cima
-        float altVLo     = 160.f;   // kt — abaixo disso, comanda nariz para baixo
-        float altSpdK    = 0.008f;  // column por kt além do limiar (soft, ±0.5 máx)
-        float altPitchK  = 0.04f;   // pushback por grau além de +30°/−15°
+        // Estabilidade de velocidade (Normal Law)
+        float spdVHi   = 330.f;   // kt — acima disso, comanda nariz para cima
+        float spdVLo   = 150.f;   // kt — abaixo (com gear UP), nariz para baixo
+        float spdStabK = 0.008f;  // column por kt além do limiar (soft, ±0.5 máx)
     } gains;
 
     // ── Interface principal ───────────────────────────────────────────────────

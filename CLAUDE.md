@@ -43,9 +43,15 @@ CMakeLists.txt          build: vcpkg + FetchContent JSBSim
 
 ## Sistema de coordenadas (crítico)
 
+- **Projeção ÚNICA** (`GeoProj.h`): Web Mercator escalado — `geo::toWorld()` /
+  `geo::toLatLon()`. TODOS os sistemas (tiles, pistas, avião, OSM) usam estas
+  funções. NUNCA converter lat/lon com equiretangular/cos local por conta
+  própria: misturar projeções deslocava fileiras de tiles ~23 m entre si longe
+  da origem (Rio→SP) e desalinhava a pista da foto de satélite.
 - Aircraft sempre na **origem (0,0,0)** do render. Todos os objetos subtraem `acWorld`.
 - **X** = Leste, **Y** = altitude AGL (metros), **Z** = Sul (cauda da aeronave)
-- `wpos.y = altAgl * FT2M`  ← AGL, **não** MSL
+- `wpos.x/z` derivados da lat/lon do JSBSim a cada frame via `geo::toWorld`
+  (não integrados por velocidade — sem drift); `wpos.y = altAgl * FT2M` ← AGL, **não** MSL
 - `acMslM = terrainElev_m + wpos.y`
 - `TileManager::getElevAt()` retorna MSL bruto do Terrarium; componente Y do input é ignorado.
 - `uYBias` uniform sobe/desce o mesh de terreno no espaço mundo.
@@ -53,18 +59,25 @@ CMakeLists.txt          build: vcpkg + FetchContent JSBSim
 ### Quatro LODs de terreno
 
 ```
-ultraFarTiles (zoom 7,  9×9,   vgrid 17) — ~1300 km raio — sem depth write
-farTiles      (zoom 12, 17×17, vgrid 33) — ~78 km raio   — sem depth write
-closeTiles    (zoom 15, 17×17, vgrid 65) — ~9.4 km raio  — sem depth write; referência de altitude (getElevAt)
-nearTiles     (zoom 17, 9×9,   vgrid 33) — ~1.3 km raio  — ÚNICA que escreve depth; 1.2 m/px no solo
+ultraFarTiles (zoom 7,  9×9,   vgrid 17) — ~1300 km raio — pintor, sem depth write
+farTiles      (zoom 12, 17×17, vgrid 33) — ~78 km raio   — depth write, stencil 2
+closeTiles    (zoom 15, 17×17, vgrid 65) — ~9.4 km raio  — depth write, stencil 3; referência de altitude (getElevAt)
+nearTiles     (zoom 17, 9×9,   vgrid 33) — ~1.3 km raio  — depth write, stencil 4; 1.2 m/px no solo
 ```
 
+- **Render FINA → GROSSA com stencil por camada** (main.cpp): cada camada grava
+  seu peso no stencil (GEQUAL + REPLACE); camada grossa nunca sobrescreve pixel
+  da fina, mas preenche buracos onde a fina não carregou. Depth write em
+  near/close/far dá oclusão real (montanha esconde o outro lado) sem
+  z-fighting entre LODs. ultraFar continua pintor sem depth (fundo).
+- **Elevação acima de z15**: Terrarium AWS só existe até z15 — nearTiles (z17)
+  busca o PNG do ancestral z15, amostra o sub-quadrante (bilinear) e cacheia o
+  pai em memória. Sem isso o tile fica plano em 0 m MSL.
 - **Curvatura da Terra** no TM_VERT: `world.y -= d²/(2·6371000)` — horizonte
   físico (~330 km a FL280) esconde a borda do grid; getElevAt (CPU) não é afetado
-- **Sem polygon offset**: ordem pintor (distante → próximo), só a camada mais
-  fina escreve depth. NUNCA usar polygon offset com muitas unidades: 150
-  unidades estourava depth > 1.0 → fragmentos descartados = "barreira reta"
-  cortando o terreno a ~11 km (cockpit near=0.05)
+- **NUNCA usar polygon offset com muitas unidades**: 150 unidades estourava
+  depth > 1.0 → fragmentos descartados = "barreira reta" cortando o terreno a
+  ~11 km (cockpit near=0.05)
 - **AirportManager registra flat areas nas 3 camadas finas** (close, far, near) —
   camada nova de tiles precisa entrar em addAirportGpu/update
 - **Fog atmosférico**: `vis = max(40 km, alt×20) × visScale` — dia claro real;
@@ -278,9 +291,13 @@ Executável: `build/Release/webflight.exe`
   main.cpp depois do batching.
 - **Modelo 3D E195**: substituir placeholder C172P (`data/models/erj195_parts.json` + OBJs já existem)
 - **Luzes da aeronave**: nav lights, strobe, landing lights
-- **Oclusão de objetos distantes**: terreno far/ultraFar não escreve depth — nuvens/luzes de aeroporto a 20+ km podem aparecer na frente de morros que deveriam ocluí-los (raro em cruzeiro)
+- **Oclusão além de 78 km**: só ultraFar (z7) não escreve depth — objetos atrás
+  de morros a 78+ km não são ocluídos (irrelevante na prática)
 
 ## Feito (não re-implementar)
+
+- **Projeção única Web Mercator** (`GeoProj.h`) + **oclusão real do terreno**
+  (depth em near/close/far, stencil por camada) — ver "Sistema de coordenadas"
 
 - **Reversão de lei FBW** (tecla L alterna NORMAL ↔ DIRECT; HUD anuncia).
   O E195-E2 tem SÓ duas leis — não existe Alternate:

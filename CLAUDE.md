@@ -197,6 +197,18 @@ data/
                   erj195.mtl → livery Embraer195.png (blank195.png = branca)
 ```
 
+### Modelo 3D — decisões (AcModel.cpp / data/models)
+
+- **Overlays coplanares** (mat2 = vidro, mat3 = faixa de janelas): desenhados
+  com `glPolygonOffset(-1,-2)` em drawMeshes — sem isso z-fighting com a pele
+  da fuselagem. Índices de material seguem a ORDEM dos `newmtl` no erj195.mtl.
+- **Reversor tem 2 OBJs**: `erj195_reverser.obj` (esq.) e
+  `erj195_reverser_r.obj` (dir., gerado espelhando X + winding invertido +
+  UV espelhada em torno do centro dos dois blocos de nacele da textura, que
+  são simétricos — logos legíveis). Registrados como `reverser`/`reverser.r`
+  no erj195_parts.json. A parte NÃO anima (partAngle retorna 0) — é a manga
+  fixa da nacele.
+
 Paths compilados via macros CMake: `AIRCRAFT_PATH`, `ENGINE_PATH`, `SYSTEMS_PATH`, `DATA_PATH`.
 
 ---

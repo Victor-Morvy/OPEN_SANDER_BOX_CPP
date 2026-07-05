@@ -155,7 +155,37 @@ TileManager::TileData TileManager::loadTile(TileKey key,
     TileData d; d.key=key;
     int z=key.z, tx=key.x, ty=key.y;
 
-    auto elevPng=httpGet(buildUrl(URL_ELEV,z,tx,ty));
+    // Terrarium AWS só existe até z15 — acima disso, busca o ancestral z15 e
+    // amostra o sub-quadrante. Sem isso o tile fica plano em 0 m MSL (invisível
+    // no litoral, precipício em São Paulo).
+    constexpr int ELEV_MAX_Z = 15;
+    int ez=z, etx=tx, ety=ty;
+    if (ez > ELEV_MAX_Z) {
+        int shift = ez - ELEV_MAX_Z;
+        etx >>= shift; ety >>= shift; ez = ELEV_MAX_Z;
+    }
+    std::vector<uint8_t> elevPng;
+    if (z > ELEV_MAX_Z) {
+        // 16 filhos z17 compartilham o mesmo pai z15 — cache em memória
+        static std::mutex s_emtx;
+        static std::unordered_map<std::string,std::vector<uint8_t>> s_ecache;
+        std::string eurl = buildUrl(URL_ELEV,ez,etx,ety);
+        {
+            std::lock_guard<std::mutex> lk(s_emtx);
+            auto it=s_ecache.find(eurl);
+            if(it!=s_ecache.end()) elevPng=it->second;
+        }
+        if(elevPng.empty()){
+            elevPng=httpGet(eurl);
+            if(!elevPng.empty()){
+                std::lock_guard<std::mutex> lk(s_emtx);
+                if(s_ecache.size()>48) s_ecache.clear();
+                s_ecache[eurl]=elevPng;
+            }
+        }
+    } else {
+        elevPng=httpGet(buildUrl(URL_ELEV,ez,etx,ety));
+    }
     auto texPng =httpGet(buildUrl(URL_TEX, z,tx,ty));
     if(elevPng.empty()||texPng.empty())
         fprintf(stderr,"[Tile z=%d %d/%d] FALHA HTTP elev=%zu tex=%zu bytes\n",
@@ -181,13 +211,23 @@ TileManager::TileData TileManager::loadTile(TileKey key,
         int w,h,c;
         uint8_t* pix=stbi_load_from_memory(elevPng.data(),(int)elevPng.size(),&w,&h,&c,3);
         if(pix){
-            for(int iy=0;iy<N;iy++) for(int ix=0;ix<N;ix++){
-                float u=(float)ix/(N-1)*(w-1);
-                float v=(float)iy/(N-1)*(h-1);
-                int px=std::min((int)u,w-1), py=std::min((int)v,h-1);
+            // Janela dentro do PNG: tile inteiro (z<=15) ou sub-quadrante do pai
+            int   sub  = 1 << (z - ez);
+            float offU = (float)(tx - (etx << (z-ez))) / sub;
+            float offV = (float)(ty - (ety << (z-ez))) / sub;
+            auto elevAt = [&](int px, int py) -> float {
                 int idx=(py*w+px)*3;
-                float r=pix[idx],g=pix[idx+1],b=pix[idx+2];
-                d.elev[iy*N+ix]=r*256.f+g+b/256.f-32768.f;
+                return pix[idx]*256.f + pix[idx+1] + pix[idx+2]/256.f - 32768.f;
+            };
+            for(int iy=0;iy<N;iy++) for(int ix=0;ix<N;ix++){
+                float u=(offU + (float)ix/(N-1)/sub)*(w-1);
+                float v=(offV + (float)iy/(N-1)/sub)*(h-1);
+                int px0=std::min((int)u,w-1), py0=std::min((int)v,h-1);
+                int px1=std::min(px0+1,w-1),  py1=std::min(py0+1,h-1);
+                float fu=u-px0, fv=v-py0;
+                float e0=elevAt(px0,py0)*(1.f-fu)+elevAt(px1,py0)*fu;
+                float e1=elevAt(px0,py1)*(1.f-fu)+elevAt(px1,py1)*fu;
+                d.elev[iy*N+ix]=e0*(1.f-fv)+e1*fv;
             }
             stbi_image_free(pix);
         }

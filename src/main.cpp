@@ -1247,8 +1247,16 @@ int main(){
                 fdm.repositionInPlace(repoParams);
                 fdm.setTemperatureAt(pauseTempC, repoParams.altFt);
                 fbw.reset();
-                // Reseta posicao render para nova altitude; X/Z voltam a 0
-                wpos = {0.0, repoParams.altFt * FT2M, 0.0};
+                // Posicao render a partir da lat/lon nova relativa a origem
+                // (mesma convencao equiretangular do TileManager)
+                {
+                    constexpr double MPD_LAT = 111320.0;
+                    double mPerDegLon = MPD_LAT *
+                        std::cos(glm::radians(repoParams.latDeg));
+                    wpos.x =  (repoParams.lonDeg - ORIGIN_LON) * mPerDegLon;
+                    wpos.z = -(repoParams.latDeg - ORIGIN_LAT) * MPD_LAT;
+                    wpos.y =  repoParams.altFt * FT2M;
+                }
                 tel = fdm.getTelemetry();
             }
 

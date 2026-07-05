@@ -415,6 +415,22 @@
       ],
       "max_deg": 60,
       "sign": 1
+    },
+    {
+      "name": "reverser.r",
+      "obj": "erj195_reverser_r.obj",
+      "pivot": [
+        4.04,
+        -1.06,
+        -4.04
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "max_deg": 60,
+      "sign": -1
     }
   ]
 }

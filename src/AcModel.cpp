@@ -275,6 +275,14 @@ float AcModel::partAngle(const AcPart& p, const AcAnimState& s) const {
 
 void AcModel::drawMeshes(GLuint prog, const std::vector<AcMesh>& meshes) const {
     for (const auto& m : meshes) {
+        // Overlays coplanares à fuselagem (mat2 = vidro, mat3 = faixa de
+        // janelas): puxa levemente em direção à câmera para evitar z-fighting
+        // com a pele da fuselagem (índices seguem a ordem do erj195.mtl)
+        bool overlay = m.matIdx >= 3;
+        if (overlay) {
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1.f, -2.f);
+        }
         glUniform1i(glGetUniformLocation(prog, "uHasTex"), m.texId ? 1 : 0);
         if (m.texId) {
             glActiveTexture(GL_TEXTURE0);
@@ -283,6 +291,7 @@ void AcModel::drawMeshes(GLuint prog, const std::vector<AcMesh>& meshes) const {
         }
         glBindVertexArray(m.vao);
         glDrawElements(GL_TRIANGLES, m.count, GL_UNSIGNED_INT, nullptr);
+        if (overlay) glDisable(GL_POLYGON_OFFSET_FILL);
     }
 }
 

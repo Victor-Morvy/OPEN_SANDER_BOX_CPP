@@ -1,4 +1,5 @@
 #include "OSMManager.h"
+#include "GeoProj.h"
 #include "TileManager.h"
 
 #include <nlohmann/json.hpp>
@@ -177,10 +178,10 @@ static std::string urlEncode(const std::string& s) {
 // ── Coordinate conversion ─────────────────────────────────────────────────────
 
 glm::vec2 OSMManager::toWorld(double lat, double lon) const {
-    return {
-        (float)((lon - _originLon) * _mPerDegLon),
-        (float)(-(lat - _originLat) * 111320.0)
-    };
+    // Projeção única (GeoProj.h) — mesma dos tiles/pistas
+    double x, z;
+    geo::toWorld(lat, lon, _originLat, _originLon, x, z);
+    return { (float)x, (float)z };
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "AirportManager.h"
 #include "TileManager.h"
+#include "GeoProj.h"
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <fstream>
@@ -173,8 +174,10 @@ static GLuint linkProg(GLuint vs, GLuint fs){
 // ── Coordenadas ───────────────────────────────────────────────────────────────
 
 glm::vec2 AirportManager::toWorld(float lat, float lon) const {
-    return { (float)((lon - _originLon) * _mPerDegLon),
-             (float)(-(lat - _originLat) * 111320.0) };
+    // Projeção única (GeoProj.h) — mesma dos tiles: pista casa com a foto
+    double x, z;
+    geo::toWorld((double)lat, (double)lon, _originLat, _originLon, x, z);
+    return { (float)x, (float)z };
 }
 
 // ── Load ──────────────────────────────────────────────────────────────────────
@@ -434,9 +437,9 @@ void AirportManager::update(const glm::vec3& acWorld, float acMslM,
                              TileManager& close, TileManager& far_,
                              TileManager& near_)
 {
-    // Converter posição do avião de volta para lat/lon (equirectangular reverso)
-    double acLat = _originLat - acWorld.z / 111320.0;
-    double acLon = _originLon + acWorld.x / _mPerDegLon;
+    // Converter posição do avião de volta para lat/lon (projeção única)
+    double acLat, acLon;
+    geo::toLatLon(acWorld.x, acWorld.z, _originLat, _originLon, acLat, acLon);
 
     int cellX = (int)std::floor(acLat);
     int cellZ = (int)std::floor(acLon);
@@ -526,8 +529,8 @@ void AirportManager::getNearby(const glm::vec3& acWorld, float radiusM,
                                std::vector<ApMarker>& out) const
 {
     out.clear();
-    double acLat = _originLat - acWorld.z / 111320.0;
-    double acLon = _originLon + acWorld.x / _mPerDegLon;
+    double acLat, acLon;
+    geo::toLatLon(acWorld.x, acWorld.z, _originLat, _originLon, acLat, acLon);
 
     int cellX = (int)std::floor(acLat);
     int cellZ = (int)std::floor(acLon);

@@ -4,6 +4,7 @@
 #include <stb_image.h>
 
 #include "TileManager.h"
+#include "GeoProj.h"
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <curl/curl.h>
@@ -194,12 +195,15 @@ TileManager::TileData TileManager::loadTile(TileKey key,
     auto [nwLat,nwLon]=tileNWLatLon(tx,  ty,  z);
     auto [seLat,seLon]=tileNWLatLon(tx+1,ty+1,z);
 
-    double avgLat    = (nwLat+seLat)*0.5;
-    double mPerDegLon= M_PER_DEG_LAT*std::cos(avgLat*DEG2RAD);
-    float  tileSzX   =(float)((seLon-nwLon)*mPerDegLon);
-    float  tileSzZ   =(float)((nwLat-seLat)*M_PER_DEG_LAT);
-    float  worldX    =(float)((nwLon-originLon)*mPerDegLon);
-    float  worldZ    =-(float)((nwLat-originLat)*M_PER_DEG_LAT);
+    // Projeção única (GeoProj.h): grid Mercator exato — bordas de tiles
+    // vizinhos coincidem em qualquer latitude/longitude
+    double nwX, nwZ, seX, seZ;
+    geo::toWorld(nwLat, nwLon, originLat, originLon, nwX, nwZ);
+    geo::toWorld(seLat, seLon, originLat, originLon, seX, seZ);
+    float  tileSzX =(float)(seX - nwX);
+    float  tileSzZ =(float)(seZ - nwZ);
+    float  worldX  =(float)nwX;
+    float  worldZ  =(float)nwZ;
 
     d.worldX=worldX; d.worldZ=worldZ;
     d.tileSzX=tileSzX; d.tileSzZ=tileSzZ;
@@ -455,9 +459,8 @@ void TileManager::evictPendingAreas() {
 
 void TileManager::update(glm::vec3 acWorld, double originLat, double originLon){
     evictPendingAreas();
-    double mPerDegLon=M_PER_DEG_LAT*std::cos(originLat*DEG2RAD);
-    double lat=originLat+(-acWorld.z)/M_PER_DEG_LAT;
-    double lon=originLon+  acWorld.x /mPerDegLon;
+    double lat, lon;
+    geo::toLatLon(acWorld.x, acWorld.z, originLat, originLon, lat, lon);
 
     auto [ctx,cty]=latLonToTile(lat,lon,_zoom);
     bool changed=(ctx!=_centerTx||cty!=_centerTy);

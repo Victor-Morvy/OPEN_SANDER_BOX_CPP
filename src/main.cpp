@@ -17,6 +17,7 @@
 #include "GuidanceModule.h"
 #include "Sky.h"
 #include "TileManager.h"
+#include "GeoProj.h"
 #include "Clouds.h"
 #include "AirportManager.h"
 #include "OSMManager.h"
@@ -795,7 +796,11 @@ int main(){
             for(int i=0;i<steps;i++) fdm.step();
 
             tel = fdm.getTelemetry();
-            integratePos(wpos, tel, dt);
+            integratePos(wpos, tel, dt);   // y = AGL
+            // X/Z direto da lat/lon do JSBSim via projeção única — sem drift
+            // de integração e sempre alinhado à imagem de satélite
+            geo::toWorld(fdm.getLatDeg(), fdm.getLonDeg(),
+                         ORIGIN_LAT, ORIGIN_LON, wpos.x, wpos.z);
         }
 
         // Pontos de contato (gear + wing tips)
@@ -840,7 +845,7 @@ int main(){
 
         // Redireciona render para FBO HDR (bloom será aplicado depois)
         postfx.bind(fw, fh);
-        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
 
         // 1. Sky
         sky.render(view,proj,sunDir,day);
@@ -851,16 +856,27 @@ int main(){
         closeTiles.visScale    = viewDistScale;
         nearTiles.visScale     = viewDistScale;
 
-        // Ordem pintor: só a ÚLTIMA camada (mais fina) escreve depth. Camada fina
-        // desenhada depois sempre cobre a grossa — sem z-fighting nem polygon
-        // offset (offsets grandes causavam a "barreira reta" que cortava o mapa).
+        // Camada FINA primeiro, com depth write + stencil por camada: cada camada
+        // grava seu "peso" no stencil onde desenhou; camadas mais grossas (peso
+        // menor, GEQUAL falha) não sobrescrevem esses pixels. Assim near/close/far
+        // têm oclusão real (montanhas escondem o outro lado) sem z-fighting entre
+        // LODs e sem polygon offset (offsets grandes causavam a "barreira reta").
+        // ultraFar (z7) continua pintor sem depth — só fundo de horizonte.
         ultraFarTiles.depthWrite = false;
-        farTiles.depthWrite      = false;
-        closeTiles.depthWrite    = false;
-        ultraFarTiles.render(proj*view, acWorld, acMslM, sunDir, day);
-        farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
-        closeTiles.render(proj*view, acWorld, acMslM, sunDir, day);
+        farTiles.depthWrite      = true;
+        closeTiles.depthWrite    = true;
+        nearTiles.depthWrite     = true;
+        glEnable(GL_STENCIL_TEST);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+        glStencilFunc(GL_GEQUAL, 4, 0xFF);
         nearTiles.render(proj*view, acWorld, acMslM, sunDir, day);
+        glStencilFunc(GL_GEQUAL, 3, 0xFF);
+        closeTiles.render(proj*view, acWorld, acMslM, sunDir, day);
+        glStencilFunc(GL_GEQUAL, 2, 0xFF);
+        farTiles .render(proj*view, acWorld, acMslM, sunDir, day);
+        glStencilFunc(GL_GEQUAL, 1, 0xFF);
+        ultraFarTiles.render(proj*view, acWorld, acMslM, sunDir, day);
+        glDisable(GL_STENCIL_TEST);
 
         // 3. Aeroportos (pistas opacas renderizadas antes das nuvens)
         airports.render(proj*view, acWorld, acMslM, day);
@@ -1247,16 +1263,10 @@ int main(){
                 fdm.repositionInPlace(repoParams);
                 fdm.setTemperatureAt(pauseTempC, repoParams.altFt);
                 fbw.reset();
-                // Posicao render a partir da lat/lon nova relativa a origem
-                // (mesma convencao equiretangular do TileManager)
-                {
-                    constexpr double MPD_LAT = 111320.0;
-                    double mPerDegLon = MPD_LAT *
-                        std::cos(glm::radians(repoParams.latDeg));
-                    wpos.x =  (repoParams.lonDeg - ORIGIN_LON) * mPerDegLon;
-                    wpos.z = -(repoParams.latDeg - ORIGIN_LAT) * MPD_LAT;
-                    wpos.y =  repoParams.altFt * FT2M;
-                }
+                // Posicao render a partir da lat/lon nova (projeção única)
+                geo::toWorld(repoParams.latDeg, repoParams.lonDeg,
+                             ORIGIN_LAT, ORIGIN_LON, wpos.x, wpos.z);
+                wpos.y = repoParams.altFt * FT2M;
                 tel = fdm.getTelemetry();
             }
 

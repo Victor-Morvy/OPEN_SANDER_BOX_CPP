@@ -14,7 +14,7 @@ newmtl mat1_blank195
 Kd 1.0000 1.0000 1.0000
 Ka 1.0000 1.0000 1.0000
 d 1.0000
-map_Kd blank195.png
+map_Kd Embraer195.png
 
 newmtl mat2
 Kd 1.0000 0.0000 0.0000
@@ -25,5 +25,5 @@ newmtl mat3_blank195
 Kd 0.0000 0.0000 0.0000
 Ka 0.2000 0.2000 0.2000
 d 0.4080
-map_Kd blank195.png
+map_Kd Embraer195.png
 

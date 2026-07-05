@@ -105,7 +105,7 @@ Stick → superfície puro nos 3 eixos, ganho fixo, sem aumentação.
 |---|---|---|
 | vert | **AttitudeHold** | mantém pitch/bank capturados; override sem desengajar |
 | vert | **AltitudeHold** | alt → VS (KP=1.6, ±3000 fpm) → pitch (PI, anti-windup por saturação); V/S manual via `targets.vsManual/vsFpm` |
-| vert | **Flch** | throttle fixo (0.92 climb / 0.08 idle), pitch segura o CAS (PI); captura a 250 ft → AltitudeHold e devolve throttle ao A/THR |
+| vert | **Flch** | pitch segura o CAS (PI, limites −4..+17° subida / −12..+6° descida); throttle base 0.92 climb / 0.08 idle COM trim dinâmico proporcional ao erro de velocidade (A/THR tem prioridade sobre razão de subida); captura a 250 ft → AltitudeHold e devolve throttle ao A/THR |
 | lat | **HeadingHold** | erro de proa → bank demand (KP=3.0, máx 25°) |
 | lat | **Nav (LNAV)** | bearing ao waypoint ativo → heading; sequencia a 1.5 NM; fim do plano → HeadingHold |
 | thr | **SpeedHold (A/THR)** | alvo é PISO de velocidade: PI assimétrico (underspeed 2× mais forte) + boost de persistência |
@@ -137,7 +137,7 @@ Flight director sempre ativo com qualquer modo ligado.
 | Yaw | damperK 0.10, betaKp 0.20, betaKi 0.06, filtro α 0.80 |
 | Spd stability | VHi 330 kt, VLo 150 kt, K 0.008/kt (±0.5 máx) |
 | ALT/VS | KP_ALT 1.6, KP_VS 0.009, KI_VS 0.0006, rate 4°/s, máx ±12° |
-| FLCH | KP 0.15 °/kt, KI 0.02, rate 3°/s, thr 0.92/0.08, captura 250 ft |
+| FLCH | KP 0.15 °/kt, KI 0.02, rate 3°/s, pitch −4..+17°/−12..+6°, thr 0.92/0.08 + trim 0.015·spdErr/s (±0.7), captura 250 ft |
 | A/THR | under KP 0.025 KI 0.010; over KP 0.015 KI 0.005; integ ±0.6 |
 | Pitch outer | KP 0.022, KI 0.003, filtro column 0.70 |
 | LNAV | KP_HDG 3.0, bank máx 25°, sequência 1.5 NM |

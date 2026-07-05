@@ -30,10 +30,12 @@ src/
 ├── FlyByWire.cpp/.h    FBW Normal Law: C* pitch / rate demand roll / yaw damper+beta
 ├── GuidanceModule.cpp  AFCS: ALT/HDG/ATT hold, A/THR, flight director
 ├── Sky.cpp/.h          shader Preetham, bloom 2-pass
+├── GeoProj.h           projeção ÚNICA lat/lon ↔ world (Web Mercator escalado)
 ├── TileManager.cpp/.h  4 LODs AWS Terrarium elevation + ESRI texture, curvatura
 ├── Terrain.cpp/.h      mesh fallback checkerboard
 ├── Clouds.cpp/.h       nuvens billboard instanced
-├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI
+├── AcModel.cpp/.h      modelo 3D ERJ-195 (OBJ+MTL, partes animadas) e cockpit
+├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI, marcadores HUD
 ├── OSMManager.cpp/.h   prédios + estradas Overpass API (pausado no main loop)
 └── PostFX.cpp/.h       framebuffer, bloom, fog
 CMakeLists.txt          build: vcpkg + FetchContent JSBSim
@@ -191,7 +193,8 @@ data/
 ├── engine/     — GE CF34-10E, PT6A, ...
 ├── systems/    — GNCUtilities.xml
 ├── nav/        — airports.csv, runways.csv
-└── models/     — c172p.glb (placeholder 3D)
+└── models/     — erj195.obj + partes animadas + cockpit.obj (AcModel.cpp);
+                  erj195.mtl → livery Embraer195.png (blank195.png = branca)
 ```
 
 Paths compilados via macros CMake: `AIRCRAFT_PATH`, `ENGINE_PATH`, `SYSTEMS_PATH`, `DATA_PATH`.
@@ -289,7 +292,7 @@ Executável: `build/Release/webflight.exe`
   paredes por variante de fachada (5 grupos), telhados+estradas com cor por
   vértice (1 grupo), água (1 grupo) → ~7 draw calls. Reativar update/render no
   main.cpp depois do batching.
-- **Modelo 3D E195**: substituir placeholder C172P (`data/models/erj195_parts.json` + OBJs já existem)
+- **Cockpit 3D**: texturas/instrumentos do cockpit.obj ainda genéricos
 - **Luzes da aeronave**: nav lights, strobe, landing lights
 - **Oclusão além de 78 km**: só ultraFar (z7) não escreve depth — objetos atrás
   de morros a 78+ km não são ocluídos (irrelevante na prática)

@@ -62,7 +62,9 @@ data/
 ├── engine/          — GE CF34-10E, PT6A, Hamilton Standard, ...
 ├── systems/         — GNCUtilities.xml
 ├── nav/             — airports.csv, runways.csv
-└── models/          — c172p.glb (placeholder 3D)
+└── models/          — erj195.obj + partes animadas (ailerons, flaps, spoilers,
+                       gear, reversor, fans) + cockpit.obj; erj195.mtl aponta a
+                       livery (Embraer195.png; blank195.png = fuselagem branca)
 ```
 
 ---
@@ -76,38 +78,49 @@ src/
 ├── FlyByWire.cpp/.h    FBW Normal Law: C* pitch, rate demand roll, yaw damper+beta
 ├── GuidanceModule.cpp  AFCS: altitude/heading/attitude hold, autothrottle, FD
 ├── Sky.cpp/.h          shader Preetham/Hosek-Wilkie
-├── TileManager.cpp/.h  tiles AWS Terrarium (elevação) + ESRI (textura), 3 LODs
+├── GeoProj.h           projeção ÚNICA do mundo (Web Mercator escalado)
+├── TileManager.cpp/.h  tiles AWS Terrarium (elevação) + ESRI (textura), 4 LODs
 ├── Terrain.cpp/.h      mesh fallback checkerboard
 ├── Clouds.cpp/.h       nuvens billboard instanced
-├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI, áreas planas
+├── AcModel.cpp/.h      modelo 3D ERJ-195 (OBJ+MTL, partes animadas) e cockpit
+├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI, áreas planas,
+│                       marcadores de aeroportos no HUD (até 250 km)
 ├── OSMManager.cpp/.h   prédios + estradas via Overpass API (pausado)
-└── PostFX.cpp/.h       FBO, bloom 2-pass
+└── PostFX.cpp/.h       FBO (depth24+stencil8), bloom 2-pass
 ```
 
 ### Sistema de coordenadas
 
+- **Projeção única** (`GeoProj.h`): Web Mercator escalado para metros na
+  latitude de origem — tiles, pistas, avião e OSM usam as mesmas funções
+  `geo::toWorld()`/`geo::toLatLon()`. Grid de tiles perfeitamente alinhado e
+  pista desenhada casa com a foto de satélite em qualquer lugar do mundo.
 - **Render**: aircraft sempre na origem (0,0,0). Todos os objetos subtraem `acWorld` antes do VP transform.
 - **X** = Leste, **Y** = altitude AGL, **Z** = Sul (cauda)
-- `wpos.y` = AGL em metros; `acMslM = terrainElev_m + wpos.y`
+- `wpos.x/z` derivados da lat/lon do JSBSim a cada frame (sem drift);
+  `wpos.y` = AGL em metros; `acMslM = terrainElev_m + wpos.y`
 
-### Terrain tiles — 3 LODs
+### Terrain tiles — 4 LODs
 
 ```
-ultraFarTiles — zoom 7,  9×9  grid (~1300 km raio)   sem depth write
-farTiles      — zoom 12, 17×17 grid (~78 km raio)    sem depth write
-closeTiles    — zoom 15, 9×9  grid (~10 km raio)     referência de altitude
+ultraFarTiles — zoom 7,  9×9  grid (~1300 km raio)  pintor, sem depth
+farTiles      — zoom 12, 17×17 grid (~78 km raio)   depth write, stencil 2
+closeTiles    — zoom 15, 17×17 grid (~9.4 km raio)  depth write, stencil 3; ref. de altitude
+nearTiles     — zoom 17, 9×9  grid (~1.3 km raio)   depth write, stencil 4; 1.2 m/px
 ```
 
+- **Render fina → grossa com stencil por camada**: cada camada grava seu peso
+  no stencil; a grossa nunca sobrescreve a fina, mas preenche onde a fina não
+  carregou. Depth em near/close/far = oclusão real (montanha esconde o outro
+  lado), sem z-fighting entre LODs e sem polygon offset.
 - **Curvatura da Terra** no vertex shader (`y -= d²/2R`): horizonte físico real
   (~330 km a FL280) — esconde a borda do grid naturalmente
-- **Sem polygon offset**: camadas distantes desenham sem escrever depth, em
-  ordem pintor (tile mais distante primeiro); a camada fina sempre cobre a
-  grossa — sem z-fighting
 - **Fog atmosférico** de dia claro: ~40 km no solo, ~170 km a FL280 (cor
   idêntica ao earthHaze do céu)
 - Far clip: 2000 km
 
-Elevação: AWS Terrarium PNG → `R×256 + G + B/256 − 32768` metros MSL  
+Elevação: AWS Terrarium PNG → `R×256 + G + B/256 − 32768` metros MSL
+(máx zoom 15 — a camada z17 amostra o sub-quadrante do tile pai z15)  
 Textura: ESRI World Imagery
 
 ### FBW Normal Law (E195-E2)
@@ -159,7 +172,7 @@ Auto-desconexão de vert+lat com coluna/manche > 15%. Flight director sempre ati
 | `Num 8/5` | Trim pitch |
 | `Num 4/6` | Trim roll |
 | `T` / `Y` | Hora do dia ± |
-| `P` | Pausa |
+| `P` | Pausa (menu: teleporte lat/lon/alt/hdg/CAS + temperatura) |
 | `Esc` | Sair |
 
 ### Joystick (gamepad Xbox / PS)

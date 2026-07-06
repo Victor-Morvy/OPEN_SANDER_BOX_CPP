@@ -59,6 +59,9 @@ public:
 
     void cleanup();
 
+    // GET binário via curl (compartilhado com MiniMap — thread-safe)
+    static std::vector<uint8_t> httpGet(const std::string& url);
+
 private:
     struct TileData {
         TileKey key;
@@ -87,7 +90,6 @@ private:
 
     static std::pair<int,int>       latLonToTile(double lat, double lon, int zoom);
     static std::pair<double,double> tileNWLatLon(int tx, int ty, int zoom);
-    static std::vector<uint8_t>     httpGet(const std::string& url);
 
     // Área plana para aplainar o mesh sob pistas de pouso
     struct FlatArea {

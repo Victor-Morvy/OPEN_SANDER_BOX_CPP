@@ -23,6 +23,7 @@
 #include "OSMManager.h"
 #include "AcModel.h"
 #include "PostFX.h"
+#include "MiniMap.h"
 
 #include <cstdio>
 #include <cmath>
@@ -590,6 +591,8 @@ int main(){
     FlyByWire       fbw;
     GuidanceModule  gm;
     bool            guidancePanelOpen = false;
+    MiniMap         minimap;
+    bool            showMinimap       = true;   // tecla M
     float           viewDistScale     = 1.0f;   // 1=dia claro real, >1=ar mais limpo
     FlyByWire::SurfaceCmd surfCmd;
 
@@ -625,7 +628,7 @@ int main(){
 
     printf("[Main] E195 FBW pronto.\n"
            "  ↑↓ profundor | ←→ aileron | A/D leme | W/S potência | B freio\n"
-           "  G=trem | F=flaps recolhe | V=flaps desce | T/Y hora | P=pausa | ESC sair\n");
+           "  G=trem | F=flaps recolhe | V=flaps desce | T/Y hora | P=pausa | M=minimapa | ESC sair\n");
 
     while(!glfwWindowShouldClose(win)){
         glfwPollEvents();
@@ -711,6 +714,14 @@ int main(){
             }
         }
 
+        // ── Minimapa HSD (M liga/desliga) ─────────────────────────────────────
+        {
+            static bool mPrev = false;
+            bool mNow = glfwGetKey(win, GLFW_KEY_M) == GLFW_PRESS;
+            if (mNow && !mPrev) showMinimap = !showMinimap;
+            mPrev = mNow;
+        }
+
         // ── Toggle de pausa (P) ────────────────────────────────────────────────
         {
             bool pNow = glfwGetKey(win, GLFW_KEY_P) == GLFW_PRESS || axes.pauseBtn;
@@ -726,6 +737,7 @@ int main(){
                     repoParams.pitchDeg   = (float)(tel.pitch * RAD2DEG);
                     repoParams.rollDeg    = (float)(tel.roll  * RAD2DEG);
                     pauseTempC = fdm.getCurrentTempC();
+                    minimap.centerPickerOn(repoParams.latDeg, repoParams.lonDeg);
                     paused = true;
                 } else {
                     fdm.resume();
@@ -952,6 +964,8 @@ int main(){
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        minimap.processUploads();   // sobe tiles OSM baixados p/ GPU (thread principal)
+
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
         ImGui::SetNextWindowSize({260,560},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.75f);
@@ -1173,11 +1187,28 @@ int main(){
             ImGui::End();
         }
 
+        // ── Minimapa HSD (canto inferior esquerdo, heading-up) ────────────────
+        if (fdmOk && showMinimap && !paused) {
+            const float mmSz = 250.f;
+            ImGui::SetNextWindowPos({8.f, (float)fh - mmSz - 8.f}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({mmSz, mmSz}, ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+            ImGui::Begin("##hsd", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoScrollbar| ImGuiWindowFlags_NoScrollWithMouse |
+                ImGuiWindowFlags_NoBackground);
+            minimap.drawHSD({mmSz, mmSz}, fdm.getLatDeg(), fdm.getLonDeg(),
+                            (float)(tel.yaw * RAD2DEG));
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
+
         // ── Painel de Reposicionamento (visivel apenas quando pausado) ──────────
         if (paused && fdmOk) {
-            ImGui::SetNextWindowPos({(float)(fw/2 - 210), (float)(fh/2 - 225)},
+            ImGui::SetNextWindowPos({(float)(fw/2 - 410), (float)(fh/2 - 235)},
                                     ImGuiCond_Always);
-            ImGui::SetNextWindowSize({420, 450}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({820, 470}, ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(.92f);
             ImGui::Begin("##reposition", nullptr,
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1186,6 +1217,9 @@ int main(){
             ImGui::TextColored({1.f, .55f, .1f, 1.f}, "SIMULACAO PAUSADA");
             ImGui::TextColored({1.f, .55f, .1f, 1.f}, "Reposicionamento");
             ImGui::Separator();
+
+            // coluna esquerda: campos e botões
+            ImGui::BeginChild("##repoL", {400.f, 0.f}, false);
 
             ImGui::Text("Latitude  (graus decimais)");
             ImGui::SetNextItemWidth(390.f);
@@ -1277,8 +1311,40 @@ int main(){
             }
 
             ImGui::Separator();
-            ImGui::TextDisabled("Edite os campos e clique TELEPORTAR para reposicionar.");
-            ImGui::TextDisabled("Pressione P ou clique RETOMAR para continuar.");
+            ImGui::TextDisabled("Edite os campos ou clique no mapa, depois");
+            ImGui::TextDisabled("TELEPORTAR. Pressione P para continuar.");
+            ImGui::EndChild();
+
+            // coluna direita: mapa de seleção (clique define lat/lon)
+            ImGui::SameLine();
+            ImGui::BeginChild("##repoR", {0.f, 0.f}, false);
+            {
+                // aeroportos ao redor do centro atual do mapa
+                static std::vector<MiniMap::Poi> mapPois;
+                {
+                    double cLat, cLon; minimap.pickerCenter(cLat, cLon);
+                    double cwx, cwz;
+                    geo::toWorld(cLat, cLon, ORIGIN_LAT, ORIGIN_LON, cwx, cwz);
+                    static std::vector<AirportManager::ApMarker> pk;
+                    airports.getNearby({(float)cwx, 0.f, (float)cwz}, 150000.f, pk);
+                    mapPois.clear();
+                    for (const auto& m : pk) {
+                        MiniMap::Poi p; p.label = m.ident;
+                        geo::toLatLon(m.wx, m.wz, ORIGIN_LAT, ORIGIN_LON, p.lat, p.lon);
+                        mapPois.push_back(std::move(p));
+                    }
+                }
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+                minimap.drawPicker({avail.x, avail.y - 26.f},
+                                   repoParams.latDeg, repoParams.lonDeg,
+                                   fdm.getLatDeg(), fdm.getLonDeg(),
+                                   (float)fdm.getHdgDeg(), &mapPois);
+                if (ImGui::SmallButton("Centrar no aviao"))
+                    minimap.centerPickerOn(fdm.getLatDeg(), fdm.getLonDeg());
+                ImGui::SameLine();
+                ImGui::TextDisabled("clique = destino | arraste = pan | scroll = zoom");
+            }
+            ImGui::EndChild();
             ImGui::End();
         }
 
@@ -1508,7 +1574,7 @@ int main(){
     sky.cleanup(); ultraFarTiles.cleanup(); farTiles.cleanup();
     closeTiles.cleanup(); nearTiles.cleanup();
     clouds.cleanup(); airports.cleanup(); osm.cleanup(); postfx.cleanup();
-    e195.cleanup(); cockpit.cleanup();
+    e195.cleanup(); cockpit.cleanup(); minimap.cleanup();
     glDeleteVertexArrays(1,&ptVAO); glDeleteBuffers(1,&ptVBO);
     glDeleteProgram(prog); glDeleteProgram(modelProg); glDeleteProgram(animProg);
     ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();

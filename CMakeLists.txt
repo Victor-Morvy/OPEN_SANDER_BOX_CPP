@@ -49,6 +49,7 @@ add_executable(webflight
   src/OSMManager.cpp
   src/AcModel.cpp
   src/PostFX.cpp
+  src/MiniMap.cpp
 )
 
 target_include_directories(webflight PRIVATE src ${Stb_INCLUDE_DIR})

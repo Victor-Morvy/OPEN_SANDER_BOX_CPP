@@ -31,6 +31,17 @@ public:
     void getNearby(const glm::vec3& acWorld, float radiusM,
                    std::vector<ApMarker>& out) const;
 
+    // Segmentos de pista (lat/lon das cabeceiras) num raio — p/ o minimapa
+    struct RwySeg {
+        std::string apIdent, leIdent, heIdent;
+        double leLat, leLon, heLat, heLon;
+        float  widthM;
+        float  leElevM, heElevM;   // 0 quando ausente no CSV
+        float  apElevM;            // fallback: elevação do aeroporto
+    };
+    void getRunwaysNear(const glm::vec3& world, float radiusM,
+                        std::vector<RwySeg>& out) const;
+
     void cleanup();
 
 private:

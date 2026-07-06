@@ -1,3 +1,4 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "MiniMap.h"
 #include "TileManager.h"   // httpGet (curl compartilhado)
 #include <glad/glad.h>
@@ -27,6 +28,32 @@ static void tile2ll(double tx, double ty, int z, double& lat, double& lon) {
 // metros por pixel de tela na latitude (tiles de 256 px)
 static double metersPerPixel(double lat, int z) {
     return 40075016.686 * std::cos(lat * MM_D2R) / (256.0 * (double)(1 << z));
+}
+// proa verdadeira A→B [°]
+static double bearingDeg(double lat1, double lon1, double lat2, double lon2) {
+    double dLon = (lon2 - lon1) * MM_D2R;
+    double la1 = lat1 * MM_D2R, la2 = lat2 * MM_D2R;
+    double y = std::sin(dLon) * std::cos(la2);
+    double x = std::cos(la1) * std::sin(la2)
+             - std::sin(la1) * std::cos(la2) * std::cos(dLon);
+    return std::fmod(std::atan2(y, x) / MM_D2R + 360.0, 360.0);
+}
+static double geoDistM(double la1, double lo1, double la2, double lo2) {
+    double x = (lo2 - lo1) * MM_D2R * std::cos(0.5 * (la1 + la2) * MM_D2R) * 6371000.0;
+    double y = (la2 - la1) * MM_D2R * 6371000.0;
+    return std::sqrt(x * x + y * y);
+}
+
+// transformação lat/lon → tela dos dois mapas (com rotação opcional do HSD)
+namespace {
+struct Xform {
+    ImVec2 center; double ctx, cty; int zoom; float c = 1.f, s = 0.f;
+    ImVec2 pt(double lat, double lon) const {
+        double tx, ty; ll2tile(lat, lon, zoom, tx, ty);
+        float ox = (float)((tx - ctx) * 256.0), oy = (float)((ty - cty) * 256.0);
+        return ImVec2(center.x + ox * c - oy * s, center.y + ox * s + oy * c);
+    }
+};
 }
 
 // ── Fetch / cache ─────────────────────────────────────────────────────────────
@@ -170,16 +197,144 @@ static void drawAircraftIcon(ImDrawList* dl, ImVec2 pos, float ang, float sz,
     dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 220), ImDrawFlags_Closed, 1.5f);
 }
 
+// ── Overlays: espinha de peixe, pistas, POIs ─────────────────────────────────
+
+// Espinha de peixe da aproximação: tracejado central estendido a partir da
+// cabeceira, costelas a cada 1 NM com rótulo de distância e os marker
+// beacons OM (~3.9 NM) / MM (~0.6 NM).
+static void drawFishbone(ImDrawList* dl, ImVec2 origin, ImVec2 dir, double mpp) {
+    float nmPx = (float)(1852.0 / mpp);
+    if (nmPx < 3.f) return;                    // longe demais — vira ruído
+    ImVec2 perp(-dir.y, dir.x);
+    const int maxNM = 10;
+    const ImU32 col = IM_COL32(255, 255, 255, 190);
+
+    // espinha tracejada (0.25 NM traço / 0.25 NM vão)
+    for (float d0 = 0.f; d0 < (float)maxNM; d0 += 0.5f)
+        dl->AddLine(origin + dir * (d0 * nmPx),
+                    origin + dir * ((d0 + 0.25f) * nmPx), col, 1.5f);
+
+    // costelas + distância [NM]
+    int labelStep = nmPx > 30.f ? 1 : nmPx > 15.f ? 2 : 5;
+    char buf[8];
+    for (int nm = 1; nm <= maxNM; ++nm) {
+        ImVec2 c = origin + dir * ((float)nm * nmPx);
+        float ribL = (nm % 5 == 0) ? 7.f : 4.5f;
+        dl->AddLine(c - perp * ribL, c + perp * ribL, col, 1.5f);
+        if (nm % labelStep == 0) {
+            snprintf(buf, sizeof(buf), "%d", nm);
+            dl->AddText(c + perp * (ribL + 3.f) - ImVec2(4.f, 7.f),
+                        IM_COL32(255, 255, 255, 210), buf);
+        }
+    }
+
+    // marker beacons na aproximação
+    if (nmPx > 8.f) {
+        auto beacon = [&](float nm, ImU32 bc, const char* tag) {
+            ImVec2 c = origin + dir * (nm * nmPx);
+            dl->AddCircleFilled(c, 3.5f, bc);
+            dl->AddCircle(c, 3.5f, IM_COL32(0, 0, 0, 200), 0, 1.f);
+            if (nmPx > 20.f) dl->AddText(c - perp * 16.f - ImVec2(6.f, 7.f), bc, tag);
+        };
+        beacon(3.9f, IM_COL32( 80, 200, 255, 255), "OM");
+        beacon(0.6f, IM_COL32(255, 200,  60, 255), "MM");
+    }
+}
+
+static void drawRunwaysOverlay(ImDrawList* dl, const Xform& xf,
+                               const std::vector<MiniMap::Rwy>& rwys,
+                               double mpp, ImVec2 p0, ImVec2 p1,
+                               bool fishbone, bool idents) {
+    float margin = fishbone ? (float)(10.0 * 1852.0 / mpp) : 40.f;
+    for (const auto& r : rwys) {
+        ImVec2 a = xf.pt(r.leLat, r.leLon);
+        ImVec2 b = xf.pt(r.heLat, r.heLon);
+        if (std::max(a.x, b.x) < p0.x - margin || std::min(a.x, b.x) > p1.x + margin ||
+            std::max(a.y, b.y) < p0.y - margin || std::min(a.y, b.y) > p1.y + margin)
+            continue;
+        float dx = b.x - a.x, dy = b.y - a.y;
+        float len = std::sqrt(dx * dx + dy * dy);
+        float thick = std::max(3.f, (float)(r.widthM / mpp));
+        dl->AddLine(a, b, IM_COL32(250, 250, 250, 235), thick + 2.f);
+        dl->AddLine(a, b, IM_COL32(40, 42, 50, 255), thick);
+        if (len < 1e-3f) continue;
+        ImVec2 dir(dx / len, dy / len);
+
+        // aproximações (só para pistas relevantes — evita clutter de aeroclube)
+        if (fishbone && geoDistM(r.leLat, r.leLon, r.heLat, r.heLon) > 900.0) {
+            drawFishbone(dl, a, ImVec2(-dir.x, -dir.y), mpp);
+            drawFishbone(dl, b, dir, mpp);
+        }
+
+        if (idents && len > 30.f) {
+            auto endLabel = [&](ImVec2 endPt, ImVec2 outDir, const std::string& id) {
+                if (id.empty()) return;
+                ImVec2 ts = ImGui::CalcTextSize(id.c_str());
+                ImVec2 tp = endPt + outDir * 14.f - ts * 0.5f;
+                dl->AddRectFilled(tp - ImVec2(2.f, 1.f), tp + ts + ImVec2(2.f, 1.f),
+                                  IM_COL32(10, 14, 18, 190), 2.f);
+                dl->AddText(tp, IM_COL32(255, 255, 255, 235), id.c_str());
+            };
+            endLabel(a, ImVec2(-dir.x, -dir.y), r.leIdent);
+            endLabel(b, dir, r.heIdent);
+        }
+    }
+}
+
+static void drawPoisOverlay(ImDrawList* dl, const Xform& xf,
+                            const std::vector<MiniMap::Poi>& pois,
+                            ImVec2 p0, ImVec2 p1) {
+    for (const auto& poi : pois) {
+        ImVec2 sp = xf.pt(poi.lat, poi.lon);
+        if (sp.x < p0.x - 40 || sp.x > p1.x + 40 ||
+            sp.y < p0.y - 20 || sp.y > p1.y + 20) continue;
+        ImU32 col;
+        switch (poi.type) {
+            case 1: {  // VOR — hexágono magenta
+                col = IM_COL32(210, 70, 210, 255);
+                ImVec2 hex[6];
+                for (int i = 0; i < 6; ++i) {
+                    float a = (float)(MM_PI / 3.0) * i + (float)(MM_PI / 6.0);
+                    hex[i] = sp + ImVec2(std::cos(a), std::sin(a)) * 5.5f;
+                }
+                dl->AddPolyline(hex, 6, col, ImDrawFlags_Closed, 1.6f);
+                dl->AddCircleFilled(sp, 1.6f, col);
+                break;
+            }
+            case 2:    // NDB — círculo duplo laranja
+                col = IM_COL32(225, 150, 40, 255);
+                dl->AddCircle(sp, 5.5f, col, 0, 1.4f);
+                dl->AddCircleFilled(sp, 2.f, col);
+                break;
+            case 3:    // DME — quadrado magenta
+                col = IM_COL32(210, 70, 210, 255);
+                dl->AddRect(sp - ImVec2(4.5f, 4.5f), sp + ImVec2(4.5f, 4.5f),
+                            col, 0.f, 0, 1.6f);
+                dl->AddCircleFilled(sp, 1.6f, col);
+                break;
+            default:   // aeroporto — círculo azul
+                col = IM_COL32(60, 190, 255, 255);
+                dl->AddCircleFilled(sp, 3.5f, col);
+                dl->AddCircle(sp, 3.5f, IM_COL32(0, 0, 0, 200), 0, 1.f);
+                break;
+        }
+        if (!poi.label.empty())
+            dl->AddText(ImVec2(sp.x + 7.f, sp.y - 7.f), col, poi.label.c_str());
+    }
+}
+
 // ── HSD (heading-up) ──────────────────────────────────────────────────────────
 
-void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg) {
+void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
+                      const std::vector<Poi>* pois,
+                      const std::vector<Rwy>* rwys) {
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
     ImGui::InvisibleButton("##hsd", size);
     if (ImGui::IsItemHovered()) {
         float wheel = ImGui::GetIO().MouseWheel;
         if (wheel > 0.f && hsdZoom < 16) hsdZoom++;
-        if (wheel < 0.f && hsdZoom >  9) hsdZoom--;
+        if (wheel < 0.f && hsdZoom >  5) hsdZoom--;
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -191,6 +346,16 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg) {
 
     double ctx, cty; ll2tile(lat, lon, hsdZoom, ctx, cty);
     drawTiles(dl, center, ctx, cty, hsdZoom, p0, p1, rot);
+
+    // overlays de navegação (posições giram com o mapa; textos ficam retos)
+    {
+        Xform xf{center, ctx, cty, hsdZoom, std::cos(rot), std::sin(rot)};
+        double mpp = metersPerPixel(lat, hsdZoom);
+        if (rwys) drawRunwaysOverlay(dl, xf, *rwys, mpp, p0, p1,
+                                     /*fishbone=*/hsdZoom >= 9,
+                                     /*idents=*/hsdZoom >= 12);
+        if (pois) drawPoisOverlay(dl, xf, *pois, p0, p1);
+    }
 
     // anel de alcance + marcador N girando com o mapa
     float rr = 0.5f * std::min(size.x, size.y) - 26.f;
@@ -241,7 +406,10 @@ void MiniMap::centerPickerOn(double lat, double lon) {
 
 bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
                          double acLat, double acLon, float acHdgDeg,
-                         const std::vector<Poi>* pois) {
+                         const std::vector<Poi>* pois,
+                         const std::vector<Rwy>* rwys,
+                         RwyPick* rwyPick) {
+    if (rwyPick) *rwyPick = RwyPick{};
     if (!_pInit) centerPickerOn(acLat, acLon);
 
     ImVec2 p0 = ImGui::GetCursorScreenPos();
@@ -278,14 +446,47 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
         }
     }
 
+    Xform xf{center, ctx, cty, _pZoom, 1.f, 0.f};
+
+    // cabeceira de pista sob o cursor (raio de 14 px) → alvo de decolagem
+    const Rwy* candRwy = nullptr;
+    bool candLE = true;
+    if (rwys && hovered) {
+        float bestD2 = 14.f * 14.f;
+        for (const auto& r : *rwys) {
+            ImVec2 ends[2] = { xf.pt(r.leLat, r.leLon), xf.pt(r.heLat, r.heLon) };
+            for (int e = 0; e < 2; ++e) {
+                float dx = io.MousePos.x - ends[e].x;
+                float dy = io.MousePos.y - ends[e].y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) { bestD2 = d2; candRwy = &r; candLE = (e == 0); }
+            }
+        }
+    }
+
     // clique (soltar sem ter arrastado) → define o destino
     if (ImGui::IsItemDeactivated()) {
         float dx = io.MousePos.x - io.MouseClickedPos[0].x;
         float dy = io.MousePos.y - io.MouseClickedPos[0].y;
         if (dx * dx + dy * dy < 25.f && hovered) {
-            double stx = ctx + (io.MousePos.x - center.x) / 256.0;
-            double sty = cty + (io.MousePos.y - center.y) / 256.0;
-            tile2ll(stx, sty, _pZoom, selLat, selLon);
+            if (candRwy && rwyPick) {
+                // gruda na cabeceira: posição + proa de decolagem
+                const Rwy& r = *candRwy;
+                rwyPick->valid  = true;
+                rwyPick->lat    = candLE ? r.leLat : r.heLat;
+                rwyPick->lon    = candLE ? r.leLon : r.heLon;
+                rwyPick->hdgDeg = candLE
+                    ? bearingDeg(r.leLat, r.leLon, r.heLat, r.heLon)
+                    : bearingDeg(r.heLat, r.heLon, r.leLat, r.leLon);
+                rwyPick->elevM  = candLE ? r.leElevM : r.heElevM;
+                rwyPick->label  = r.apIdent + " " + (candLE ? r.leIdent : r.heIdent);
+                selLat = rwyPick->lat;
+                selLon = rwyPick->lon;
+            } else {
+                double stx = ctx + (io.MousePos.x - center.x) / 256.0;
+                double sty = cty + (io.MousePos.y - center.y) / 256.0;
+                tile2ll(stx, sty, _pZoom, selLat, selLon);
+            }
             clicked = true;
         }
     }
@@ -295,36 +496,44 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
     dl->AddRectFilled(p0, p1, IM_COL32(12, 16, 20, 255), 4.f);
     drawTiles(dl, center, ctx, cty, _pZoom, p0, p1, 0.f);
 
-    // helper lat/lon → tela
-    auto toScreen = [&](double la, double lo) {
-        double tx, ty; ll2tile(la, lo, _pZoom, tx, ty);
-        return ImVec2(center.x + (float)((tx - ctx) * 256.0),
-                      center.y + (float)((ty - cty) * 256.0));
-    };
+    double mpp = metersPerPixel(_pLat, _pZoom);
 
-    // aeroportos próximos
-    if (pois && _pZoom >= 8) {
-        for (const auto& poi : *pois) {
-            ImVec2 sp = toScreen(poi.lat, poi.lon);
-            if (sp.x < p0.x - 40 || sp.x > p1.x + 40 ||
-                sp.y < p0.y - 20 || sp.y > p1.y + 20) continue;
-            dl->AddCircleFilled(sp, 3.5f, IM_COL32(60, 190, 255, 255));
-            dl->AddCircle(sp, 3.5f, IM_COL32(0, 0, 0, 200), 0, 1.f);
-            dl->AddText(ImVec2(sp.x + 6.f, sp.y - 7.f),
-                        IM_COL32(60, 190, 255, 255), poi.label.c_str());
-        }
+    // pistas (+ espinha de peixe) e navaids/aeroportos
+    if (rwys && _pZoom >= 9)
+        drawRunwaysOverlay(dl, xf, *rwys, mpp, p0, p1,
+                           /*fishbone=*/_pZoom >= 10, /*idents=*/_pZoom >= 12);
+    if (pois && _pZoom >= 8)
+        drawPoisOverlay(dl, xf, *pois, p0, p1);
+
+    // destaque da cabeceira sob o cursor + dica de decolagem
+    if (candRwy) {
+        const Rwy& r = *candRwy;
+        ImVec2 sp = candLE ? xf.pt(r.leLat, r.leLon) : xf.pt(r.heLat, r.heLon);
+        dl->AddCircle(sp, 10.f, IM_COL32(255, 220, 40, 255), 0, 2.5f);
+        double hdg = candLE
+            ? bearingDeg(r.leLat, r.leLon, r.heLat, r.heLon)
+            : bearingDeg(r.heLat, r.heLon, r.leLat, r.leLon);
+        char tip[96];
+        snprintf(tip, sizeof(tip), "DECOLAR %s %s  proa %03d\xC2\xB0",
+                 r.apIdent.c_str(),
+                 (candLE ? r.leIdent : r.heIdent).c_str(), (int)std::lround(hdg));
+        ImVec2 tp = ImVec2(io.MousePos.x + 14.f, io.MousePos.y - 20.f);
+        ImVec2 ts = ImGui::CalcTextSize(tip);
+        dl->AddRectFilled(tp - ImVec2(4.f, 2.f), tp + ts + ImVec2(4.f, 2.f),
+                          IM_COL32(10, 14, 18, 230), 3.f);
+        dl->AddText(tp, IM_COL32(255, 220, 40, 255), tip);
     }
 
     // avião (posição atual)
     {
-        ImVec2 ap = toScreen(acLat, acLon);
+        ImVec2 ap = xf.pt(acLat, acLon);
         drawAircraftIcon(dl, ap, acHdgDeg * (float)MM_D2R, 9.f,
                          IM_COL32(255, 255, 255, 255));
     }
 
     // marcador do destino selecionado (pino laranja)
     {
-        ImVec2 mp = toScreen(selLat, selLon);
+        ImVec2 mp = xf.pt(selLat, selLon);
         dl->AddLine(ImVec2(mp.x, mp.y - 14.f), mp, IM_COL32(255, 140, 20, 255), 2.5f);
         dl->AddCircleFilled(ImVec2(mp.x, mp.y - 17.f), 5.5f, IM_COL32(255, 140, 20, 255));
         dl->AddCircle(ImVec2(mp.x, mp.y - 17.f), 5.5f, IM_COL32(0, 0, 0, 200), 0, 1.5f);

@@ -24,6 +24,7 @@
 #include "AcModel.h"
 #include "PostFX.h"
 #include "MiniMap.h"
+#include "Navaids.h"
 
 #include <cstdio>
 #include <cmath>
@@ -533,6 +534,9 @@ int main(){
     AirportManager airports;
     airports.load(DATA_PATH "/airports.csv", DATA_PATH "/runways.csv",
                   ORIGIN_LAT, ORIGIN_LON);
+
+    Navaids navdb;
+    navdb.load(DATA_PATH "/navaids.csv");
 
     OSMManager osm;
     {
@@ -1190,6 +1194,44 @@ int main(){
         // ── Minimapa HSD (canto inferior esquerdo, heading-up) ────────────────
         if (fdmOk && showMinimap && !paused) {
             const float mmSz = 250.f;
+            double aLat = fdm.getLatDeg(), aLon = fdm.getLonDeg();
+
+            // raio visível do widget (metade da diagonal) na latitude/zoom atuais
+            double mpp = 40075016.686 * cos(aLat * 3.14159265358979 / 180.0)
+                       / (256.0 * (double)(1 << minimap.hsdZoom));
+            float viewR = (float)(mpp * mmSz * 0.75);
+
+            static std::vector<MiniMap::Poi> hsdPois;
+            static std::vector<MiniMap::Rwy> hsdRwys;
+            hsdPois.clear(); hsdRwys.clear();
+            if (minimap.hsdZoom >= 8) {
+                static std::vector<AirportManager::ApMarker> mk;
+                airports.getNearby(acWorld, viewR, mk);
+                for (const auto& m : mk) {
+                    MiniMap::Poi p; p.type = 0; p.label = m.ident;
+                    geo::toLatLon(m.wx, m.wz, ORIGIN_LAT, ORIGIN_LON, p.lat, p.lon);
+                    hsdPois.push_back(std::move(p));
+                }
+                static std::vector<const Navaids::Nav*> nvs;
+                navdb.getNearby(aLat, aLon, viewR, nvs);
+                for (const auto* n : nvs) {
+                    MiniMap::Poi p;
+                    p.type  = n->type == Navaids::Type::VOR ? 1
+                            : n->type == Navaids::Type::NDB ? 2 : 3;
+                    p.label = n->ident;
+                    p.lat = n->lat; p.lon = n->lon;
+                    hsdPois.push_back(std::move(p));
+                }
+            }
+            if (minimap.hsdZoom >= 9) {
+                static std::vector<AirportManager::RwySeg> rs;
+                airports.getRunwaysNear(acWorld, std::min(viewR, 200000.f), rs);
+                for (const auto& r : rs)
+                    hsdRwys.push_back({r.apIdent, r.leIdent, r.heIdent,
+                                       r.leLat, r.leLon, r.heLat, r.heLon,
+                                       r.widthM, r.leElevM, r.heElevM});
+            }
+
             ImGui::SetNextWindowPos({8.f, (float)fh - mmSz - 8.f}, ImGuiCond_Always);
             ImGui::SetNextWindowSize({mmSz, mmSz}, ImGuiCond_Always);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
@@ -1198,8 +1240,8 @@ int main(){
                 ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoScrollbar| ImGuiWindowFlags_NoScrollWithMouse |
                 ImGuiWindowFlags_NoBackground);
-            minimap.drawHSD({mmSz, mmSz}, fdm.getLatDeg(), fdm.getLonDeg(),
-                            (float)(tel.yaw * RAD2DEG));
+            minimap.drawHSD({mmSz, mmSz}, aLat, aLon,
+                            (float)(tel.yaw * RAD2DEG), &hsdPois, &hsdRwys);
             ImGui::End();
             ImGui::PopStyleVar();
         }
@@ -1319,30 +1361,62 @@ int main(){
             ImGui::SameLine();
             ImGui::BeginChild("##repoR", {0.f, 0.f}, false);
             {
-                // aeroportos ao redor do centro atual do mapa
+                // aeroportos, navaids e pistas ao redor do centro atual do mapa
                 static std::vector<MiniMap::Poi> mapPois;
+                static std::vector<MiniMap::Rwy> mapRwys;
                 {
                     double cLat, cLon; minimap.pickerCenter(cLat, cLon);
                     double cwx, cwz;
                     geo::toWorld(cLat, cLon, ORIGIN_LAT, ORIGIN_LON, cwx, cwz);
+                    glm::vec3 cw{(float)cwx, 0.f, (float)cwz};
+
                     static std::vector<AirportManager::ApMarker> pk;
-                    airports.getNearby({(float)cwx, 0.f, (float)cwz}, 150000.f, pk);
+                    airports.getNearby(cw, 150000.f, pk);
                     mapPois.clear();
                     for (const auto& m : pk) {
-                        MiniMap::Poi p; p.label = m.ident;
+                        MiniMap::Poi p; p.type = 0; p.label = m.ident;
                         geo::toLatLon(m.wx, m.wz, ORIGIN_LAT, ORIGIN_LON, p.lat, p.lon);
                         mapPois.push_back(std::move(p));
                     }
+                    static std::vector<const Navaids::Nav*> nvs;
+                    navdb.getNearby(cLat, cLon, 150000.0, nvs);
+                    for (const auto* n : nvs) {
+                        MiniMap::Poi p;
+                        p.type  = n->type == Navaids::Type::VOR ? 1
+                                : n->type == Navaids::Type::NDB ? 2 : 3;
+                        p.label = n->ident;
+                        p.lat = n->lat; p.lon = n->lon;
+                        mapPois.push_back(std::move(p));
+                    }
+                    static std::vector<AirportManager::RwySeg> rs;
+                    airports.getRunwaysNear(cw, 150000.f, rs);
+                    mapRwys.clear();
+                    for (const auto& r : rs)
+                        mapRwys.push_back({r.apIdent, r.leIdent, r.heIdent,
+                                           r.leLat, r.leLon, r.heLat, r.heLon,
+                                           r.widthM,
+                                           r.leElevM != 0.f ? r.leElevM : r.apElevM,
+                                           r.heElevM != 0.f ? r.heElevM : r.apElevM});
                 }
                 ImVec2 avail = ImGui::GetContentRegionAvail();
+                MiniMap::RwyPick rwyPick;
                 minimap.drawPicker({avail.x, avail.y - 26.f},
                                    repoParams.latDeg, repoParams.lonDeg,
                                    fdm.getLatDeg(), fdm.getLonDeg(),
-                                   (float)fdm.getHdgDeg(), &mapPois);
+                                   (float)fdm.getHdgDeg(), &mapPois,
+                                   &mapRwys, &rwyPick);
+                if (rwyPick.valid) {
+                    // cabeceira clicada: configura decolagem parado na pista
+                    repoParams.headingDeg = rwyPick.hdgDeg;
+                    repoParams.altFt      = rwyPick.elevM / FT2M + 8.0;
+                    repoParams.speedKcas  = 0.f;
+                    repoParams.pitchDeg   = 0.f;
+                    repoParams.rollDeg    = 0.f;
+                }
                 if (ImGui::SmallButton("Centrar no aviao"))
                     minimap.centerPickerOn(fdm.getLatDeg(), fdm.getLonDeg());
                 ImGui::SameLine();
-                ImGui::TextDisabled("clique = destino | arraste = pan | scroll = zoom");
+                ImGui::TextDisabled("clique = destino | cabeceira = decolagem | scroll = zoom");
             }
             ImGui::EndChild();
             ImGui::End();

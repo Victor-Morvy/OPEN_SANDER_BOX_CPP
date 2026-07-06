@@ -35,7 +35,10 @@ src/
 ├── Terrain.cpp/.h      mesh fallback checkerboard
 ├── Clouds.cpp/.h       nuvens billboard instanced
 ├── AcModel.cpp/.h      modelo 3D ERJ-195 (OBJ+MTL, partes animadas) e cockpit
-├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI, marcadores HUD
+├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI, marcadores HUD,
+│                       getRunwaysNear (segmentos p/ minimapa)
+├── Navaids.cpp/.h      navaids.csv (OurAirports) — VOR/NDB/DME, grade 1°×1°
+├── MiniMap.cpp/.h      mapa raster OSM p/ UI: HSD runtime + picker de teleporte
 ├── OSMManager.cpp/.h   prédios + estradas Overpass API (pausado no main loop)
 └── PostFX.cpp/.h       framebuffer, bloom, fog
 CMakeLists.txt          build: vcpkg + FetchContent JSBSim
@@ -103,6 +106,10 @@ C*_atual = Nz + gains.cstarK × q_rps
 erro     = C*_dem − C*_atual
 elevator = −PID(erro)   // negativo = cabrar
 ```
+
+**Modo solo (wow)**: stick → profundor DIRETO (senão não há rotação na
+decolagem — elevator neutro no chão foi bug). Integradores zerados; ao
+decolar a C* reinicializa capturando o estado atual (`_initialized=false`).
 
 ### Roll — rate demand / attitude hold (ativo)
 
@@ -192,7 +199,7 @@ data/
 ├── aircraft/   — XMLs JSBSim (E195, C172P, ...)
 ├── engine/     — GE CF34-10E, PT6A, ...
 ├── systems/    — GNCUtilities.xml
-├── nav/        — airports.csv, runways.csv
+├── nav/        — airports.csv, runways.csv, navaids.csv (OurAirports)
 └── models/     — erj195.obj + partes animadas + cockpit.obj (AcModel.cpp);
                   erj195.mtl → livery Embraer195.png (blank195.png = branca)
 ```
@@ -210,6 +217,39 @@ data/
   fixa da nacele.
 
 Paths compilados via macros CMake: `AIRCRAFT_PATH`, `ENGINE_PATH`, `SYSTEMS_PATH`, `DATA_PATH`.
+
+---
+
+## Minimapa (MiniMap.cpp) — HSD + picker de teleporte
+
+Mapa raster `tile.openstreetmap.org` (256 px) para a UI, independente do
+terreno 3D. Fetch em `std::async` (máx 6 simultâneos, reusa
+`TileManager::httpGet`), upload GL em `processUploads()` na **thread
+principal**, cache LRU de 220 texturas. Tile ausente desenha o **ancestral
+(até 4 níveis) com sub-UV** — sem buraco preto ao trocar zoom. Download que
+falha fica marcado (tex=0) e não é repetido na sessão.
+
+- **drawHSD** (tecla M, canto inferior esquerdo, 250 px): heading-up — o mapa
+  gira `rot = -hdg` e o avião fica fixo no centro; textos ficam retos. Anel de
+  alcance com distância real (`m/px = 40075016·cos(lat)/(256·2^z)`), "N"
+  girando no anel, proa no topo. Scroll = zoom z5–16.
+- **drawPicker** (menu de pausa P, north-up): arrastar = pan, scroll = zoom
+  ancorado no cursor, **clique = lat/lon do teleporte**. Clique a ≤14 px de uma
+  cabeceira "gruda" (RwyPick): posição na cabeceira + **proa de decolagem**
+  (bearing cabeceira→outra ponta), alt = elev + 8 ft, CAS 0 — main.cpp aplica
+  em repoParams. Elevação de cabeceira ausente no CSV cai para a do aeroporto.
+- **Overlays** (compartilhados pelos dois mapas via `Xform` com rotação):
+  - Pistas: linha com espessura real (`widthM/mpp`, mín 3 px), contorno claro,
+    idents nas pontas (zoom ≥12); fonte = `AirportManager::getRunwaysNear`.
+  - **Espinha de peixe** nas duas aproximações (pistas >900 m, zoom ≥9/10):
+    tracejado central até 10 NM, costelas a cada 1 NM com distância, marker
+    beacons OM (3.9 NM, ciano) e MM (0.6 NM, âmbar).
+  - POIs: aeroporto = círculo azul; VOR = hexágono magenta; NDB = círculo
+    duplo laranja; DME/TACAN = quadrado magenta (fonte `Navaids`, gate zoom ≥8).
+- Rotação de tiles: `AddImageQuad` com cantos girados em torno do centro;
+  cobertura pelo círculo circunscrito do retângulo do widget.
+- Proa de pista é **verdadeira** (bearing geodésico) — bate com o psi do JSBSim;
+  o número do ident é magnético (Rio: RWY 10 ≈ proa 074° true).
 
 ---
 

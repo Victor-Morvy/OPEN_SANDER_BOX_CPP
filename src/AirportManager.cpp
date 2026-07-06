@@ -555,6 +555,42 @@ void AirportManager::getNearby(const glm::vec3& acWorld, float radiusM,
     }
 }
 
+// ── getRunwaysNear ────────────────────────────────────────────────────────────
+
+void AirportManager::getRunwaysNear(const glm::vec3& world, float radiusM,
+                                    std::vector<RwySeg>& out) const
+{
+    out.clear();
+    double cLat, cLon;
+    geo::toLatLon(world.x, world.z, _originLat, _originLon, cLat, cLon);
+
+    int cellX = (int)std::floor(cLat);
+    int cellZ = (int)std::floor(cLon);
+    int dLat  = (int)std::ceil(radiusM / 111320.0) + 1;
+    int dLon  = (int)std::ceil(radiusM / (double)_mPerDegLon) + 1;
+
+    for (int la = -dLat; la <= dLat; ++la) {
+        for (int lo = -dLon; lo <= dLon; ++lo) {
+            int64_t key = (int64_t)(cellX+la+90)*1000 + (int64_t)(cellZ+lo+180);
+            auto it = _grid.find(key);
+            if (it == _grid.end()) continue;
+            for (size_t idx : it->second) {
+                const Airport& ap = _airports[idx];
+                auto rit = _runways.find(ap.ident);
+                if (rit == _runways.end()) continue;
+                glm::vec2 w = toWorld(ap.lat, ap.lon);
+                float dx = w.x - world.x, dz = w.y - world.z;
+                if (dx*dx + dz*dz > radiusM*radiusM) continue;
+                for (const Runway& r : rit->second)
+                    out.push_back({ap.ident, r.leIdent, r.heIdent,
+                                   (double)r.leLat, (double)r.leLon,
+                                   (double)r.heLat, (double)r.heLon,
+                                   r.widthM, r.leElevM, r.heElevM, ap.elevM});
+            }
+        }
+    }
+}
+
 // ── findAirport ───────────────────────────────────────────────────────────────
 
 bool AirportManager::findAirport(const std::string& ident,

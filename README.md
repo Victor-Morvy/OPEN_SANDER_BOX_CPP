@@ -61,7 +61,7 @@ data/
 ├── aircraft/        — XMLs JSBSim (E195, C172P, DC3, MD11, ...)
 ├── engine/          — GE CF34-10E, PT6A, Hamilton Standard, ...
 ├── systems/         — GNCUtilities.xml
-├── nav/             — airports.csv, runways.csv
+├── nav/             — airports.csv, runways.csv, navaids.csv (OurAirports)
 └── models/          — erj195.obj + partes animadas (ailerons, flaps, spoilers,
                        gear, reversor, fans) + cockpit.obj; erj195.mtl aponta a
                        livery (Embraer195.png; blank195.png = fuselagem branca)
@@ -85,6 +85,11 @@ src/
 ├── AcModel.cpp/.h      modelo 3D ERJ-195 (OBJ+MTL, partes animadas) e cockpit
 ├── AirportManager.cpp  CSV aeroportos, luzes de pista, PAPI, áreas planas,
 │                       marcadores de aeroportos no HUD (até 250 km)
+├── Navaids.cpp/.h      VOR/NDB/DME do navaids.csv (grade espacial 1°×1°)
+├── MiniMap.cpp/.h      mapa raster OSM: HSD heading-up em runtime (tecla M) e
+│                       mapa de teleporte no menu de pausa (pistas + espinha de
+│                       peixe com marker beacons + navaids; clique na cabeceira
+│                       posiciona para decolagem com a proa da pista)
 ├── OSMManager.cpp/.h   prédios + estradas via Overpass API (pausado)
 └── PostFX.cpp/.h       FBO (depth24+stencil8), bloom 2-pass
 ```
@@ -172,7 +177,8 @@ Auto-desconexão de vert+lat com coluna/manche > 15%. Flight director sempre ati
 | `Num 8/5` | Trim pitch |
 | `Num 4/6` | Trim roll |
 | `T` / `Y` | Hora do dia ± |
-| `P` | Pausa (menu: teleporte lat/lon/alt/hdg/CAS + temperatura) |
+| `M` | Minimapa HSD (toggle; scroll = zoom) |
+| `P` | Pausa (menu: teleporte por campos ou clicando no mapa; clique numa cabeceira = decolagem com a proa da pista) |
 | `Esc` | Sair |
 
 ### Joystick (gamepad Xbox / PS)

@@ -106,9 +106,11 @@ void FlyByWire::update(float dt, const PilotInput& inp,
 
         columnMod = std::clamp(columnMod, -1.f, 1.f);
 
-        // Em terra: elevator neutro — C* sem sentido com aeronave parada no chão
+        // Em terra: modo solo — stick → profundor DIRETO (permite a rotação na
+        // decolagem; C* não faz sentido com rodas no chão). Ao decolar
+        // (wow=false) a lei C* reinicializa capturando o estado atual.
         if (st.wow) {
-            out.elevLH = out.elevRH = 0.f;
+            out.elevLH = out.elevRH = clamp1(-inp.column);
             _elevInteg    = 0.f;
             _prevPitchErr = 0.f;
             _initialized  = false;  // reinicializa quando decolar

@@ -404,6 +404,12 @@ static void updateAxes(Axes& a, GLFWwindow* w, float dt){
     bool rNow=K(GLFW_KEY_R);
     if(rNow && !rPrev) a.reverser = !a.reverser;
     rPrev = rNow;
+
+    // Câmera cockpit (C — toggle; no gamepad é o ○/B)
+    static bool cPrev=false;
+    bool cNow=K(GLFW_KEY_C);
+    if(cNow && !cPrev) a.cockpit = !a.cockpit;
+    cPrev = cNow;
 }
 
 // ── Posição mundial (double precision) ───────────────────────────────────────
@@ -455,8 +461,18 @@ static glm::mat4 orbitView(const Telemetry& t, float yaw, float pitch){
     return glm::lookAt(camPos, target, worldUp);
 }
 
+// ── Posto de pilotagem (body-frame GL: X=direita, Y=cima, Z=ré; nariz = -Z) ──
+// Olho do capitão derivado do modelo EXTERNO (erj195.obj): vidro do para-brisa
+// em Z -16.13..-14.63, faixa de janelas Y 1.22..1.59 → olho no assento esquerdo
+// (X -0.5), na altura do centro do vidro, cabeça sob a borda traseira do vidro.
+static const glm::vec3 EYE_LOCAL{-0.50f, 1.35f, -14.50f};
+// cockpit.obj foi modelado ~3 m ATRÁS do para-brisa externo (moldura interna em
+// Z -13.13..-12.63 vs vidro externo -16.13..-14.63; vertical já alinhada a menos
+// de 5 cm). Este offset realinha o interior; o olho no assento esquerdo do
+// interior (-0.50, 1.30, -11.50) + offset cai exatamente em EYE_LOCAL.
+static const glm::vec3 COCKPIT_MODEL_OFFSET{0.f, 0.05f, -3.00f};
+
 // ── Câmera cockpit com movimento de cabeça ────────────────────────────────────
-// eyeLocal: posição do olho do capitão no body-frame do modelo (GL: X=lat, Y=up, Z=fwd=-Z)
 // headYaw/headPitch: desvio do olhar em relação ao nariz (stick direito no cockpit)
 static glm::mat4 cockpitView(const Telemetry& t, float headYaw, float headPitch){
     // Atitude do avião → world frame
@@ -466,7 +482,7 @@ static glm::mat4 cockpitView(const Telemetry& t, float headYaw, float headPitch)
     R = glm::rotate(R, -(float)t.roll,  glm::vec3(0,0,1));
 
     // Olho do capitão no body-frame → world
-    glm::vec3 eye   = glm::vec3(R * glm::vec4(0.35f, 2.3f, -9.5f, 1.f));
+    glm::vec3 eye   = glm::vec3(R * glm::vec4(EYE_LOCAL, 1.f));
     glm::vec3 fwdW  = glm::vec3(R * glm::vec4(0.f, 0.f, -1.f, 0.f));
     glm::vec3 upW   = glm::vec3(R * glm::vec4(0.f, 1.f,  0.f, 0.f));
     glm::vec3 rightW = glm::normalize(glm::cross(fwdW, upW));
@@ -474,7 +490,10 @@ static glm::mat4 cockpitView(const Telemetry& t, float headYaw, float headPitch)
     // Aplica movimento de cabeça:
     // headYaw  → rotaciona fwdW em torno do upW (olhar esq/dir)
     // headPitch→ rotaciona em torno do rightW (olhar cima/baixo)
-    glm::mat4 Ryaw   = glm::rotate(glm::mat4(1.f), headYaw,   upW);
+    // Sinal invertido: com nariz=-Z e direita=+X, +headYaw em torno de +upW
+    // gira o olhar para a ESQUERDA (regra da mão direita) — headYaw positivo
+    // deve olhar para a DIREITA, daí o -headYaw aqui.
+    glm::mat4 Ryaw   = glm::rotate(glm::mat4(1.f), -headYaw,   upW);
     fwdW  = glm::normalize(glm::vec3(Ryaw * glm::vec4(fwdW,  0.f)));
     rightW= glm::normalize(glm::cross(fwdW, upW));
     glm::mat4 Rpitch = glm::rotate(glm::mat4(1.f), headPitch, rightW);
@@ -915,10 +934,12 @@ int main(){
         fanAngle += (float)(tel.n1[0] / 100.0 * 20.0 * dt);
 
         if (axes.cockpit) {
-            // Visão interna: renderiza cockpit, omite exterior
+            // Visão interna: renderiza cockpit, omite exterior.
+            // Offset realinha o interior com o para-brisa do modelo externo.
             if (cockpit.ok()) {
                 AcAnimState noAnim;
-                cockpit.draw(modelProg, animProg, mvp, noAnim);
+                glm::mat4 mvpCk = mvp * glm::translate(glm::mat4(1.f), COCKPIT_MODEL_OFFSET);
+                cockpit.draw(modelProg, animProg, mvpCk, noAnim);
             }
         } else {
             // Visão externa: renderiza fuselagem + superfícies animadas

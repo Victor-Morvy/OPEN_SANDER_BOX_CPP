@@ -202,6 +202,10 @@ static GLuint makeProgram(const char* vs,const char* fs){
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
+// 3 câmeras: externa (órbita/chase), cabine (modelo cockpit.obj) e nariz
+// (sem modelo de cabine — olho centralizado no bico, tipo synthetic vision).
+enum class CamMode { External = 0, Cockpit = 1, Nose = 2 };
+
 struct Axes {
     float ail=0, elv=0, rdr=0, thr=0.50f, brk=0, flaps=0;
     float trimElev=0, trimAil=0;
@@ -217,8 +221,12 @@ struct Axes {
     // ── Cockpit: olhar com a cabeça (stick dir. sem gatilhos)
     float headYaw   = 0.f;  // yaw local relativo ao nariz
     float headPitch = 0.f;  // pitch local
-    // ── Toggle câmera (Círculo/B)
-    bool cockpit = false;
+    // ── Ciclo de câmera (Círculo/B): External → Cockpit → Nose → External
+    CamMode camMode = CamMode::External;
+    // ── Joystick presente MAS parado no centro neste eixo → teclado assume.
+    // Sem isso, qualquer joystick conectado (mesmo sem uso, ex.: um gamepad
+    // ocioso reconhecido pelo Windows) travava as setas permanentemente.
+    bool joyAilActive = false, joyElvActive = false, joyRdrActive = false;
 };
 
 static bool gGearPrev = false;
@@ -244,6 +252,8 @@ static float applyDZ(float v){
 }
 
 static bool readJoystick(Axes& a, float dt){
+    a.joyAilActive = a.joyElvActive = a.joyRdrActive = false;
+
     // Encontra o primeiro joystick conectado
     int jid = -1;
     for(int i = GLFW_JOYSTICK_1; i <= GLFW_JOYSTICK_LAST; ++i)
@@ -269,8 +279,8 @@ static bool readJoystick(Axes& a, float dt){
     a.trigsHeld = (l2val > 0.f && r2val > 0.f);
 
     // Stick esquerdo: sempre voo
-    if(JS_AIL < ac) a.ail = applyDZ(ax[JS_AIL]);
-    if(JS_ELV < ac) a.elv = applyDZ(ax[JS_ELV]);
+    if(JS_AIL < ac) { a.ail = applyDZ(ax[JS_AIL]); a.joyAilActive = a.ail != 0.f; }
+    if(JS_ELV < ac) { a.elv = applyDZ(ax[JS_ELV]); a.joyElvActive = a.elv != 0.f; }
 
     // Stick direito: comportamento depende do modo
     float rX = (ac > 2) ? applyDZ(ax[2]) : 0.f;
@@ -281,14 +291,15 @@ static bool readJoystick(Axes& a, float dt){
         constexpr float CAM_ROT = 1.8f;
         a.camYaw   += -rX * CAM_ROT * dt;
         a.camPitch  = std::clamp(a.camPitch + rY * CAM_ROT * dt, -1.4f, 1.4f);
-    } else if (a.cockpit) {
-        // Modo cockpit (sem gatilhos) → olhar com a cabeça
+    } else if (a.camMode != CamMode::External) {
+        // Modo cockpit/nariz (sem gatilhos) → olhar com a cabeça
         constexpr float HEAD_ROT = 1.5f;
         a.headYaw   = std::clamp(a.headYaw   + rX * HEAD_ROT * dt,  -1.2f,  1.2f);
         a.headPitch = std::clamp(a.headPitch + (-rY)* HEAD_ROT * dt, -0.6f,  0.5f);
     } else {
         // Voo normal → leme + manete
         a.rdr = rX;
+        a.joyRdrActive = rX != 0.f;
         a.thr = std::clamp(a.thr + (-rY) * JS_THR_RATE * dt, 0.f, 1.f);
     }
 
@@ -337,10 +348,11 @@ static bool readJoystick(Axes& a, float dt){
         }
         prevR3 = r3;
 
-        // ── Círculo/B = alternar câmera cockpit / externa ─────────────────────
+        // ── Círculo/B = ciclo de câmera: externa → cockpit → nariz → externa ──
         static bool prevCircle = false;
         bool circle = B(1);
-        if(circle && !prevCircle) a.cockpit = !a.cockpit;
+        if(circle && !prevCircle)
+            a.camMode = (CamMode)(((int)a.camMode + 1) % 3);
         prevCircle = circle;
     }
     return true;
@@ -351,31 +363,36 @@ static void updateAxes(Axes& a, GLFWwindow* w, float dt){
 
     bool hasJoy = readJoystick(a, dt);
 
-    // Teclado só atua nos eixos que o joystick não cobriu
-    if(!hasJoy){
+    // Teclado só atua nos eixos que o joystick NÃO está movendo agora — por
+    // eixo, não em bloco. Antes, qualquer joystick presente (mesmo parado no
+    // centro, ex.: gamepad ocioso reconhecido pelo Windows) desativava TODAS
+    // as setas/A/D permanentemente, pois o gate era em cima de hasJoy inteiro.
+    if(!a.joyAilActive){
         // Rolagem (wheel)
         if(K(GLFW_KEY_RIGHT)) a.ail=std::min(1.f,a.ail+CTRL_RATE*dt);
         else if(K(GLFW_KEY_LEFT)) a.ail=std::max(-1.f,a.ail-CTRL_RATE*dt);
         else a.ail*=std::max(0.f,1.f-CTRL_RET*dt);
+    }
 
+    if(!a.joyElvActive){
         // Arfagem (column) — DOWN = puxar = nariz sobe (convenção stick)
         if(K(GLFW_KEY_DOWN)) a.elv=std::min(1.f,a.elv+CTRL_RATE*dt);
         else if(K(GLFW_KEY_UP)) a.elv=std::max(-1.f,a.elv-CTRL_RATE*dt);
         else a.elv*=std::max(0.f,1.f-CTRL_RET*dt);
+    }
 
+    if(!a.joyRdrActive){
         // Pedais (rudder / nariz)
         if(K(GLFW_KEY_D)) a.rdr=std::min(1.f,a.rdr+CTRL_RATE*dt);
         else if(K(GLFW_KEY_A)) a.rdr=std::max(-1.f,a.rdr-CTRL_RATE*dt);
         else a.rdr*=std::max(0.f,1.f-CTRL_RET*dt);
-
-        // Potência
-        if(K(GLFW_KEY_W)) a.thr=std::min(1.f,a.thr+.5f*dt);
-        if(K(GLFW_KEY_S)) a.thr=std::max(0.f,a.thr-.5f*dt);
-    } else {
-        // Com joystick: teclado W/S ainda ajusta throttle incrementalmente
-        if(K(GLFW_KEY_W)) a.thr=std::min(1.f,a.thr+.3f*dt);
-        if(K(GLFW_KEY_S)) a.thr=std::max(0.f,a.thr-.3f*dt);
     }
+
+    // Potência — teclado sempre incremental (taxa menor quando há joystick,
+    // já que o stick direito normalmente cobre o manete)
+    float thrRate = hasJoy ? 0.3f : 0.5f;
+    if(K(GLFW_KEY_W)) a.thr=std::min(1.f,a.thr+thrRate*dt);
+    if(K(GLFW_KEY_S)) a.thr=std::max(0.f,a.thr-thrRate*dt);
 
     a.brk = (a.brk > 0.f) ? a.brk : (K(GLFW_KEY_B)?1.f:0.f);
 
@@ -406,10 +423,10 @@ static void updateAxes(Axes& a, GLFWwindow* w, float dt){
     if(rNow && !rPrev) a.reverser = !a.reverser;
     rPrev = rNow;
 
-    // Câmera cockpit (C — toggle; no gamepad é o ○/B)
+    // Ciclo de câmera (C — externa → cockpit → nariz → externa; no gamepad é o ○/B)
     static bool cPrev=false;
     bool cNow=K(GLFW_KEY_C);
-    if(cNow && !cPrev) a.cockpit = !a.cockpit;
+    if(cNow && !cPrev) a.camMode = (CamMode)(((int)a.camMode + 1) % 3);
     cPrev = cNow;
 }
 
@@ -473,17 +490,28 @@ static const glm::vec3 EYE_LOCAL{-0.50f, 1.35f, -14.50f};
 // interior (-0.50, 1.30, -11.50) + offset cai exatamente em EYE_LOCAL.
 static const glm::vec3 COCKPIT_MODEL_OFFSET{0.f, 0.05f, -3.00f};
 
-// ── Câmera cockpit com movimento de cabeça ────────────────────────────────────
-// headYaw/headPitch: desvio do olhar em relação ao nariz (stick direito no cockpit)
-static glm::mat4 cockpitView(const Telemetry& t, float headYaw, float headPitch){
+// Âncora do olho do capitão no bico (frame body: X=direita, Y=cima, Z=ré;
+// nariz=-Z), usada pela câmera "Nose" — sem modelo de cabine, centralizada no
+// eixo X (0, não deslocada pro assento esquerdo) e bem à frente do para-brisa,
+// como uma synthetic vision view (mesma ideia de HUD/EFVS moderno: olho
+// solto no bico, aeronave completa visível ao redor/atrás, sem estrutura de
+// painel obstruindo).
+static const glm::vec3 NOSE_EYE_LOCAL{0.f, 1.30f, -18.0f};
+
+// ── Câmera de olho fixo no body-frame, com movimento de cabeça ──────────────
+// headYaw/headPitch: desvio do olhar em relação ao nariz (stick direito).
+// Usada tanto pela câmera de cabine (EYE_LOCAL) quanto pela câmera de nariz
+// (NOSE_EYE_LOCAL) — só muda o ponto do olho.
+static glm::mat4 eyeView(const Telemetry& t, const glm::vec3& eyeLocal,
+                          float headYaw, float headPitch){
     // Atitude do avião → world frame
     glm::mat4 R(1.f);
     R = glm::rotate(R, -(float)t.yaw,   glm::vec3(0,1,0));
     R = glm::rotate(R,  (float)t.pitch, glm::vec3(1,0,0));
     R = glm::rotate(R, -(float)t.roll,  glm::vec3(0,0,1));
 
-    // Olho do capitão no body-frame → world
-    glm::vec3 eye   = glm::vec3(R * glm::vec4(EYE_LOCAL, 1.f));
+    // Olho no body-frame → world
+    glm::vec3 eye   = glm::vec3(R * glm::vec4(eyeLocal, 1.f));
     glm::vec3 fwdW  = glm::vec3(R * glm::vec4(0.f, 0.f, -1.f, 0.f));
     glm::vec3 upW   = glm::vec3(R * glm::vec4(0.f, 1.f,  0.f, 0.f));
     glm::vec3 rightW = glm::normalize(glm::cross(fwdW, upW));
@@ -867,9 +895,14 @@ int main(){
         glm::mat4 view;
         float fovDeg   = 70.f;
         float nearClip = 0.5f;
-        if (axes.cockpit) {
-            // Visão interna: FOV mais amplo, clip próximo para ver instrumentos
-            view     = cockpitView(tel, axes.headYaw, axes.headPitch);
+        if (axes.camMode == CamMode::Cockpit) {
+            // Visão de cabine: FOV mais amplo, clip próximo para ver instrumentos
+            view     = eyeView(tel, EYE_LOCAL, axes.headYaw, axes.headPitch);
+            fovDeg   = 80.f;
+            nearClip = 0.05f;
+        } else if (axes.camMode == CamMode::Nose) {
+            // Synthetic vision: olho solto no bico, sem modelo de cabine
+            view     = eyeView(tel, NOSE_EYE_LOCAL, axes.headYaw, axes.headPitch);
             fovDeg   = 80.f;
             nearClip = 0.05f;
         } else {
@@ -923,7 +956,8 @@ int main(){
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);
 
-        // 4. Modelo 3D — exterior (E195) ou cockpit (visão interna)
+        // 4. Modelo 3D — exterior (E195, câmeras External/Nose) ou cockpit
+        //    (câmera Cockpit)
         // Ordem YXZ: yaw → pitch → roll
         glm::mat4 acRot(1.f);
         acRot = glm::rotate(acRot, -(float)tel.yaw,   glm::vec3(0,1,0));
@@ -934,8 +968,8 @@ int main(){
         // Fan speed: N1 0-100 → ~20 rad/s at full power (visual only)
         fanAngle += (float)(tel.n1[0] / 100.0 * 20.0 * dt);
 
-        if (axes.cockpit) {
-            // Visão interna: renderiza cockpit, omite exterior.
+        if (axes.camMode == CamMode::Cockpit) {
+            // Visão de cabine: renderiza cockpit, omite exterior.
             // Offset realinha o interior com o para-brisa do modelo externo.
             if (cockpit.ok()) {
                 AcAnimState noAnim;
@@ -943,7 +977,8 @@ int main(){
                 cockpit.draw(modelProg, animProg, mvpCk, noAnim);
             }
         } else {
-            // Visão externa: renderiza fuselagem + superfícies animadas
+            // Visão externa (chase) ou nariz (synthetic vision, sem cabine):
+            // ambas renderizam a fuselagem + superfícies animadas
             if (e195.ok()) {
                 AcAnimState animState;
                 animState.aileronL = surfCmd.aileronL;
@@ -1269,6 +1304,8 @@ int main(){
         }
 
         // ── PFD: velocidade | atitude (+bank/slip-skid) | altitude | V/S ────────
+        // Sempre no canto inferior direito, em qualquer câmera (External,
+        // Cockpit ou Nose) — pedido explícito do Victor.
         if (fdmOk && !paused) {
             const float pfdH = 220.f, pfdW = 360.f;
             ImGui::SetNextWindowPos({(float)(fw - pfdW - 8.f), (float)fh - pfdH - 8.f},

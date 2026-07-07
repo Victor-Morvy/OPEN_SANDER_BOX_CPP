@@ -40,6 +40,9 @@ src/
 ├── Navaids.cpp/.h      navaids.csv (OurAirports) — VOR/NDB/DME, grade 1°×1°
 ├── MiniMap.cpp/.h      mapa raster OSM p/ UI: HSD runtime + picker de teleporte
 ├── OSMManager.cpp/.h   prédios/estradas/água Overpass API — 7 draw calls (batches)
+├── PFD.cpp/.h          instrumentos via ImGui draw list (sem textura/3D) —
+│                       indicador de atitude (ADI): horizonte, escada de pitch,
+│                       escala de bank
 └── PostFX.cpp/.h       framebuffer, bloom, fog
 CMakeLists.txt          build: vcpkg + FetchContent JSBSim
 ```
@@ -219,6 +222,72 @@ data/
   fixa da nacele.
 
 Paths compilados via macros CMake: `AIRCRAFT_PATH`, `ENGINE_PATH`, `SYSTEMS_PATH`, `DATA_PATH`.
+
+---
+
+## PFD (PFD.cpp) — velocidade | atitude | altitude | V/S
+
+Painel desenhado 100% via `ImDrawList` (sem textura, sem geometria 3D).
+`PFD::drawPanel(pos, size, pitchDeg, rollDeg, betaDeg, speedKt, altFt, vsFpm)`
+é chamado em main.cpp num painel `##pfd` sem background, canto inferior
+direito, 360×220, visível em runtime (não pausado). Layout clássico de EFIS,
+esquerda→direita: fita de velocidade (CAS) | ADI | fita de altitude (MSL) |
+fita de V/S. Larguras internas são proporções fixas de `size.x`
+(`drawPanel`: spd/alt = 0.155, vs = 0.075, resto = ADI).
+
+- **Fitas de velocidade/altitude**: janela de ±40 kt / ±500 ft ao redor do
+  valor atual, marcas maiores + rótulo a cada 20 kt / 500 ft. Caixa de valor
+  central (`drawValueBox`) ancorada **dentro** da fita (não no limite exato —
+  spillover pro painel vizinho ficava cortado pelo z-order de desenho; o
+  centro da caixa é inset por `boxW*0.5` a partir da borda).
+- **Fita de V/S**: escala fixa ±2000 fpm, ponteiro triangular verde saindo da
+  borda esquerda. Sem números (faixa estreita demais) — só ticks a cada 500.
+- **ADI** (`drawAttitude`, ainda exposta separada p/ reuso): recebe agora
+  também `betaDeg` p/ o slip/skid.
+- **Escada de pitch em 3 granularidades**: loop único em `n` (unidade = 2.5°,
+  `p = n*2.5`); `n%4==0` → múltiplo de 10° (linha grande + rótulo, maior ainda
+  a cada 30°); `n%2==0` (e não múltiplo de 4) → múltiplo de 5° (linha curta,
+  sem rótulo); resto → múltiplo de 2.5° (marca minúscula central, sem rótulo).
+
+`tel.pitch`/`tel.roll` em graus (convenção JSBSim: pitch + = nariz para cima,
+roll + = asa **direita** para baixo).
+
+**Modelo "bola giroscópica"**: a esfera (céu/solo/horizonte/escada de pitch)
+fica estabilizada ao mundo — do ponto de vista do painel (fixo à aeronave) ela
+gira **oposto** ao roll da aeronave. Todo ponto "preso à bola" usa
+`ballPoint(center, x, y, cosR, sinR)` com `xr = x·cosR + y·sinR`,
+`yr = -x·sinR + y·cosR` (R = rollRad). **Verificado por screenshot**: roll
+direita (+) → lado direito do horizonte sobe (correto, não mexer). O
+**ponteiro de bank** é a ÚNICA exceção: visualmente correto é apontar para o
+MESMO lado do bank (roll direita → ponteiro para a direita da escala), o
+oposto do que "preso à bola" (mesma rotação do horizonte) dava — por isso usa
+`ptrSinR = -sinR` (equivale a rotacionar por `-rollRad`) só nesse ponteiro;
+horizonte/escada/slip-skid continuam com `sinR` normal.
+Pitch desloca o horizonte verticalmente: `pitchOffY = pitchDeg·pxPerDeg`
+(`pxPerDeg = size.y/40`, ±20° de tela cheia); uma marca da escada em `p` graus
+fica em `y = pitchOffY − p·pxPerDeg` — em `p == pitchDeg` a marca cai exatamente
+no símbolo fixo da aeronave (centro do instrumento, não gira nem desloca).
+
+Preenchimento céu/solo: dois quads gigantes (`BIG = 5000`) cobrindo qualquer
+rotação/pitch, cortados pelo `PushClipRect` do retângulo do instrumento —
+não há máscara circular (facilita o clipping, e combina com PFD retangular de
+EFIS moderno em vez de bússola redonda analógica).
+
+**Slip/skid**: trapézio branco numa trilha fixa logo abaixo do índice de bank
+(0° fixo) — ao contrário do ponteiro de bank, **não gira** com o roll (fica
+preso ao case, como num ADI real). Desloca lateralmente com `betaDeg/10`
+(clamp ±1), mesma escala/sinal do `bN` já usado no painel SUPERFICIES ("Beta")
+— reaproveitado por consistência, mas o **sentido físico do deslocamento não
+foi validado** (não há como testar derrapagem controlada sem manche/pedais
+físicos na sessão de verificação).
+
+**Nota**: durante o teste de verificação, apertar seta direita (`a.ail` +) fez
+o avião rolar para a **esquerda** (`tel.roll` negativo) — possível inversão de
+sinal em algum ponto entre `inp.wheel` e a lei de rate-demand/attitude-hold do
+FlyByWire (o comentário em `FlyByWire.cpp:250` diz "+wheel = roll direita", o
+que não bateu com o observado). Não investigado/corrigido — fora do escopo
+desta tarefa. O ADI em si está correto: reflete fielmente `tel.pitch`/`tel.roll`
+seja qual for o sinal que a física produzir.
 
 ---
 

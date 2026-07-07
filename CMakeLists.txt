@@ -51,6 +51,7 @@ add_executable(webflight
   src/PostFX.cpp
   src/MiniMap.cpp
   src/Navaids.cpp
+  src/PFD.cpp
 )
 
 target_include_directories(webflight PRIVATE src ${Stb_INCLUDE_DIR})

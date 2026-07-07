@@ -25,6 +25,7 @@
 #include "PostFX.h"
 #include "MiniMap.h"
 #include "Navaids.h"
+#include "PFD.h"
 
 #include <cstdio>
 #include <cmath>
@@ -1263,6 +1264,27 @@ int main(){
                 ImGuiWindowFlags_NoBackground);
             minimap.drawHSD({mmSz, mmSz}, aLat, aLon,
                             (float)(tel.yaw * RAD2DEG), &hsdPois, &hsdRwys);
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
+
+        // ── PFD: velocidade | atitude (+bank/slip-skid) | altitude | V/S ────────
+        if (fdmOk && !paused) {
+            const float pfdH = 220.f, pfdW = 360.f;
+            ImGui::SetNextWindowPos({(float)(fw - pfdW - 8.f), (float)fh - pfdH - 8.f},
+                                    ImGuiCond_Always);
+            ImGui::SetNextWindowSize({pfdW, pfdH}, ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+            ImGui::Begin("##pfd", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoScrollbar| ImGuiWindowFlags_NoScrollWithMouse |
+                ImGuiWindowFlags_NoBackground);
+            ImVec2 pfdPos = ImGui::GetWindowPos();
+            PFD::drawPanel(pfdPos, {pfdW, pfdH},
+                           (float)(tel.pitch * RAD2DEG), (float)(tel.roll * RAD2DEG),
+                           (float)tel.betaDeg, (float)tel.cas, (float)tel.altBaro,
+                           (float)tel.vsFpm);
             ImGui::End();
             ImGui::PopStyleVar();
         }

@@ -92,6 +92,9 @@ src/
 │                       posiciona para decolagem com a proa da pista)
 ├── OSMManager.cpp/.h   prédios, estradas e água via Overpass API em 7 batches
 │                       (desativado: elevação dos 3D oscila vista de perto)
+├── PFD.cpp/.h          painel desenhado via ImGui draw list — fita de
+│                       velocidade, ADI (horizonte/pitch/bank/slip-skid),
+│                       fita de altitude, fita de V/S
 └── PostFX.cpp/.h       FBO (depth24+stencil8), bloom 2-pass
 ```
 

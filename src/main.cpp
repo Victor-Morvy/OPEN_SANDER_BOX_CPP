@@ -773,7 +773,7 @@ int main(){
 
         // Aeroportos (precisa acMslM para PAPI)
         airports.update(acWorld, acMslM, closeTiles, farTiles, nearTiles);
-        osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles);
+        // osm.update(fdm.getLatDeg(), fdm.getLonDeg(), closeTiles, farTiles); // desativado: de perto a elevação dos 3D oscila visivelmente
 
         if(fdmOk && !paused){
             // 1. Monta input do piloto
@@ -898,7 +898,7 @@ int main(){
         airports.render(proj*view, acWorld, acMslM, day);
 
         // 3b. OSM: prédios, estradas, água (7 draw calls — batches por grupo)
-        osm.render(proj*view, acWorld, day, (float)glfwGetTime());
+        // osm.render(proj*view, acWorld, day, (float)glfwGetTime()); // desativado: de perto a elevação dos 3D oscila visivelmente
 
         // 4. Nuvens — depois do terreno, antes do avião (opaco ganha depth test)
         clouds.render(view, proj, acWorld, acMslM, sunDir, day);

@@ -299,10 +299,15 @@ Trim incremental: `JT = 0.25f` unidades/s enquanto botão pressionado.
 
 ---
 
-## OSM (OSMManager.cpp) — ativo, 7 draw calls
+## OSM (OSMManager.cpp) — DESATIVADO por decisão do usuário
 
-`osm.update()`/`osm.render()` ativos no main loop. `CELL_DEG = 0.08` (bbox 0.16°).
-Cache em `%LOCALAPPDATA%/webflight/osm_cache/` com TTL 7 dias.
+`osm.update()`/`osm.render()` estão **comentados** no main loop. Motivo: de
+longe parece estático, mas **de perto a elevação de todos os 3D do OSM oscila
+visivelmente a todo momento** (provável interação entre a elevação assada uma
+única vez e os LODs de terreno que refinam por baixo — closeTiles/nearTiles
+mudam o solo, o 3D não acompanha). NÃO reativar sem resolver isso.
+`CELL_DEG = 0.08` (bbox 0.16°). Cache em `%LOCALAPPDATA%/webflight/osm_cache/`
+com TTL 7 dias.
 
 **Batching**: em vez de 1 VBO por mesh (~40k draw calls — congelava), os meshes
 são incorporados em **7 batches** (`struct Batch`): 5 de paredes (um por variante
@@ -365,8 +370,9 @@ Executável: `build/Release/webflight.exe`
 
 - **Projeção única Web Mercator** (`GeoProj.h`) + **oclusão real do terreno**
   (depth em near/close/far, stencil por camada) — ver "Sistema de coordenadas"
-- **OSM batching** (~40k meshes → 7 draw calls) + update/render reativados no
-  main loop — ver seção "OSM (OSMManager.cpp)"
+- **OSM batching** (~40k meshes → 7 draw calls) — implementado e funcional,
+  mas o OSM foi **desativado** pelo usuário (elevação oscila de perto); ver
+  seção "OSM (OSMManager.cpp)"
 
 - **Reversão de lei FBW** (tecla L alterna NORMAL ↔ DIRECT; HUD anuncia).
   O E195-E2 tem SÓ duas leis — não existe Alternate:

@@ -90,7 +90,9 @@ src/
 │                       mapa de teleporte no menu de pausa (pistas + espinha de
 │                       peixe com marker beacons + navaids; clique na cabeceira
 │                       posiciona para decolagem com a proa da pista)
-├── OSMManager.cpp/.h   prédios + estradas via Overpass API (pausado)
+├── OSMManager.cpp/.h   prédios, estradas e água via Overpass API — geometria
+│                       agrupada em 7 batches (5 paredes por fachada, telhados+
+│                       estradas com cor por vértice, água) = 7 draw calls
 └── PostFX.cpp/.h       FBO (depth24+stencil8), bloom 2-pass
 ```
 

@@ -39,7 +39,7 @@ src/
 │                       getRunwaysNear (segmentos p/ minimapa)
 ├── Navaids.cpp/.h      navaids.csv (OurAirports) — VOR/NDB/DME, grade 1°×1°
 ├── MiniMap.cpp/.h      mapa raster OSM p/ UI: HSD runtime + picker de teleporte
-├── OSMManager.cpp/.h   prédios + estradas Overpass API (pausado no main loop)
+├── OSMManager.cpp/.h   prédios/estradas/água Overpass API — 7 draw calls (batches)
 └── PostFX.cpp/.h       framebuffer, bloom, fog
 CMakeLists.txt          build: vcpkg + FetchContent JSBSim
 ```
@@ -89,11 +89,13 @@ nearTiles     (zoom 17, 9×9,   vgrid 33) — ~1.3 km raio  — depth write, ste
   cor = earthHaze do Sky shader
 - Far clip 2000 km; near 0.5 (externa) / 0.05 (cockpit)
 
-### Prédios / OSM (uBaseY)
+### Prédios / OSM (elevação assada)
 
-Cada `GpuMesh` tem `baseY` = elevação MSL do centróide. Vertex shader: `world.y = localY + uBaseY + 0.3`.  
-O `+0.3` é lift fixo para evitar z-fighting com o terreno (`glPolygonOffset(-1,-50)` também aplicado).  
-**Bug conhecido**: quando o avião voa sobre terreno com elevação MSL diferente, o baseY pode variar. Correção arquitetural (bake MSL nos vértices em build-time) está pendente.
+A elevação MSL é **assada nos vértices** no bake (main thread, `bakeElevation`):
+prédios/telhados/água num nível único (centróide, +0.3 de lift; água +0.1),
+estradas por vértice (acompanham o relevo). Sem uniform de base em runtime;
+`glPolygonOffset(-1,-3)` contra z-fighting (offset grande estoura o depth em
+distância).
 
 ---
 
@@ -297,9 +299,25 @@ Trim incremental: `JT = 0.25f` unidades/s enquanto botão pressionado.
 
 ---
 
-## OSM (OSMManager.cpp) — pausado
+## OSM (OSMManager.cpp) — ativo, 7 draw calls
 
-`osm.update()` e `osm.render()` estão **comentados** no main loop para evitar freeze (39k+ meshes de upload). `CELL_DEG = 0.08` (8.9 km). Cache em `%LOCALAPPDATA%/webflight/osm_cache/` com TTL 7 dias.
+`osm.update()`/`osm.render()` ativos no main loop. `CELL_DEG = 0.08` (bbox 0.16°).
+Cache em `%LOCALAPPDATA%/webflight/osm_cache/` com TTL 7 dias.
+
+**Batching**: em vez de 1 VBO por mesh (~40k draw calls — congelava), os meshes
+são incorporados em **7 batches** (`struct Batch`): 5 de paredes (um por variante
+de fachada, stride 8 = pos+normal+uv), 1 de telhados+estradas (stride 6 =
+pos+**cor por vértice** — shader flat lê atributo, não uniform), 1 de água
+(stride 3, translúcida, sem depth write). Fluxo por frame (`uploadPending`):
+até 200 meshes da `_staging` passam por `bakeElevation` (adiado se o terreno
+não carregou) → `appendToBatch` (cópia CPU, índices com offset de base) →
+`syncBatch` sobe **só a região nova** via `glBufferSubData`; o buffer GPU cresce
+1.5× quando estoura (id não muda — VAO continua válido). Troca de célula:
+`clearMeshes` zera o conteúdo mas mantém buffers/capacidade GPU.
+
+**Água**: só anéis fechados (`pts.front()==pts.back()`) — way aberto (margem de
+multipolygon / rio como linha) earcutado vira triângulos degenerados cruzando a
+cidade. Baías/oceano (multipolygon gigante) não aparecem — só a foto ESRI.
 
 ---
 
@@ -338,12 +356,6 @@ Executável: `build/Release/webflight.exe`
 
 ## Pendências
 
-- **OSM batching**: altitude (bake nos vértices), upload amortizado (200/frame) e
-  curvatura JÁ estão implementados no OSMManager — mas render é 1 draw call por
-  mesh (~40k/frame) e ficou pesado. Falta agrupar por tipo em VBOs grandes:
-  paredes por variante de fachada (5 grupos), telhados+estradas com cor por
-  vértice (1 grupo), água (1 grupo) → ~7 draw calls. Reativar update/render no
-  main.cpp depois do batching.
 - **Cockpit 3D**: texturas/instrumentos do cockpit.obj ainda genéricos
 - **Luzes da aeronave**: nav lights, strobe, landing lights
 - **Oclusão além de 78 km**: só ultraFar (z7) não escreve depth — objetos atrás
@@ -353,6 +365,8 @@ Executável: `build/Release/webflight.exe`
 
 - **Projeção única Web Mercator** (`GeoProj.h`) + **oclusão real do terreno**
   (depth em near/close/far, stencil por camada) — ver "Sistema de coordenadas"
+- **OSM batching** (~40k meshes → 7 draw calls) + update/render reativados no
+  main loop — ver seção "OSM (OSMManager.cpp)"
 
 - **Reversão de lei FBW** (tecla L alterna NORMAL ↔ DIRECT; HUD anuncia).
   O E195-E2 tem SÓ duas leis — não existe Alternate:

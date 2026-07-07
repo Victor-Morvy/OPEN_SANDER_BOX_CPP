@@ -29,16 +29,19 @@ public:
     void cleanup();
 
 private:
-    // ── GPU mesh ──────────────────────────────────────────────────────────────
+    // ── GPU batch ─────────────────────────────────────────────────────────────
     enum MeshType : uint8_t { BLDWALL=0, BLDROOF=1, ROAD=2, WATER=3 };
 
-    struct GpuMesh {
-        GLuint   vao=0, vbo=0, ibo=0;
-        uint32_t indexCount=0;
-        MeshType type;
-        glm::vec3 flatColor{1,1,1};
-        int      facadeVariant=0;
-        // Elevação MSL é assada (bake) nos vértices no upload — sem uBaseY runtime
+    // Um VBO grande por grupo (~7 draw calls no total, era 1 por mesh ≈ 40k).
+    // verts/idx são a cópia CPU que só cresce; a região nova sobe por
+    // glBufferSubData e o buffer GPU expande geometricamente quando estoura.
+    struct Batch {
+        GLuint vao=0, vbo=0, ibo=0;
+        int    stride=3;                     // floats por vértice
+        std::vector<float>    verts;
+        std::vector<uint32_t> idx;
+        size_t gpuVertCap=0,   gpuIdxCap=0;  // capacidade alocada na GPU (elementos)
+        size_t gpuVertCount=0, gpuIdxCount=0;// elementos já enviados
     };
 
     // ── CPU raw mesh (built on bg thread, no GL calls) ────────────────────────
@@ -53,8 +56,11 @@ private:
     struct RawBatch { std::vector<RawMesh> meshes; };
 
     // ── State ─────────────────────────────────────────────────────────────────
-    std::vector<GpuMesh> _meshes;
-    std::vector<RawMesh> _staging;   // fila main-thread: upload amortizado N/frame
+    Batch _walls[5];   // stride 8: pos+normal+uv — um por variante de fachada
+    Batch _flat;       // stride 6: pos+cor — telhados + estradas juntos
+    Batch _water;      // stride 3: pos
+    size_t _meshCount = 0;           // meshes já incorporados (só p/ log)
+    std::vector<RawMesh> _staging;   // fila main-thread: bake amortizado N/frame
     std::thread          _thread;
     std::mutex           _mutex;
     std::atomic<int>     _gen{0};
@@ -77,7 +83,8 @@ private:
     glm::vec2 toWorld(double lat, double lon) const;
     void      clearMeshes();
     void      uploadPending(TileManager& close, TileManager& far_);
-    void      uploadMesh(GpuMesh& g, const RawMesh& r);
+    void      appendToBatch(const RawMesh& r);   // CPU: verts+idx no grupo certo
+    void      syncBatch(Batch& b);               // GPU: sobe só a região nova
     // Assa elevação MSL nos vértices. false = terreno ainda não carregado (adia).
     bool      bakeElevation(RawMesh& r, TileManager& close, TileManager& far_);
 

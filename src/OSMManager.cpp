@@ -58,23 +58,26 @@ void main(){
 static const char* FLAT_VERT = R"glsl(
 #version 330 core
 layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
 uniform mat4  uVP;
 uniform vec3  uAcPos;
+out vec3 vColor;
 void main(){
     vec3 world = aPos;   // elevação MSL já assada nos vértices
     vec2 dxz = world.xz - uAcPos.xz;
     world.y -= dot(dxz, dxz) / (2.0 * 6371000.0);  // curvatura da Terra
     gl_Position = uVP * vec4(world - uAcPos, 1.0);
+    vColor = aColor;
 }
 )glsl";
 
 static const char* FLAT_FRAG = R"glsl(
 #version 330 core
+in vec3 vColor;
 out vec4 FragColor;
-uniform vec3  uColor;
 uniform float uDay;
 void main(){
-    FragColor = vec4(uColor * mix(0.2, 1.0, uDay), 1.0);
+    FragColor = vec4(vColor * mix(0.2, 1.0, uDay), 1.0);
 }
 )glsl";
 
@@ -200,6 +203,10 @@ bool OSMManager::init(double originLat, double originLon,
     _flatProg  = compileShader(FLAT_VERT,  FLAT_FRAG);
     _waterProg = compileShader(WATER_VERT, WATER_FRAG);
 
+    for (auto& b : _walls) b.stride = 8;   // pos+normal+uv
+    _flat.stride  = 6;                     // pos+cor
+    _water.stride = 3;                     // pos
+
     genFacadeTextures();
     printf("[OSM] init ok (origin %.4f, %.4f)\n", originLat, originLon);
     return true;
@@ -289,13 +296,17 @@ void OSMManager::update(double acLat, double acLon,
 // ── clearMeshes ───────────────────────────────────────────────────────────────
 
 void OSMManager::clearMeshes() {
-    for (auto& m : _meshes) {
-        if (m.vao) glDeleteVertexArrays(1, &m.vao);
-        if (m.vbo) glDeleteBuffers(1, &m.vbo);
-        if (m.ibo) glDeleteBuffers(1, &m.ibo);
-    }
-    _meshes.clear();
-    _staging.clear();   // descarta meshes da célula antiga ainda não subidos
+    // Buffers GPU são mantidos (capacidade reaproveitada na célula nova);
+    // só o conteúdo é zerado — gpuVertCount=0 faz o syncBatch reescrever tudo.
+    auto reset = [](Batch& b) {
+        b.verts.clear(); b.idx.clear();
+        b.gpuVertCount = b.gpuIdxCount = 0;
+    };
+    for (auto& b : _walls) reset(b);
+    reset(_flat);
+    reset(_water);
+    _meshCount = 0;
+    _staging.clear();   // descarta meshes da célula antiga ainda não assados
 }
 
 // ── uploadPending (main thread) ───────────────────────────────────────────────
@@ -349,63 +360,131 @@ void OSMManager::uploadPending(TileManager& close, TileManager& far_) {
     }
     if (_staging.empty()) return;
 
-    // Upload amortizado: no máx N meshes por frame. Meshes cujo terreno ainda
-    // não carregou ficam na fila e são re-tentados nos frames seguintes.
+    // Bake amortizado: no máx N meshes por frame, incorporados nos batches CPU.
+    // Meshes cujo terreno ainda não carregou ficam na fila e são re-tentados.
     constexpr int MAX_PER_FRAME = 200;
-    int uploaded = 0;
-    for (size_t i = 0; i < _staging.size() && uploaded < MAX_PER_FRAME; ) {
+    int baked = 0;
+    for (size_t i = 0; i < _staging.size() && baked < MAX_PER_FRAME; ) {
         if (!bakeElevation(_staging[i], close, far_)) { ++i; continue; }
 
-        GpuMesh g;
-        g.type          = _staging[i].type;
-        g.flatColor     = _staging[i].flatColor;
-        g.facadeVariant = _staging[i].facadeVariant;
-        uploadMesh(g, _staging[i]);
-        _meshes.push_back(g);
-        ++uploaded;
+        appendToBatch(_staging[i]);
+        ++_meshCount;
+        ++baked;
 
         // swap-erase (ordem irrelevante)
         _staging[i] = std::move(_staging.back());
         _staging.pop_back();
     }
 
-    if (uploaded > 0 && _staging.empty())
-        printf("[OSM] upload completo: %zu meshes\n", _meshes.size());
+    if (baked > 0) {
+        // Sobe só as regiões novas dos 7 batches para a GPU
+        for (auto& b : _walls) syncBatch(b);
+        syncBatch(_flat);
+        syncBatch(_water);
+        if (_staging.empty())
+            printf("[OSM] batches completos: %zu meshes em 7 draw calls\n", _meshCount);
+    }
 }
 
-void OSMManager::uploadMesh(GpuMesh& g, const RawMesh& r) {
+// Incorpora um RawMesh no batch do seu grupo (cópia CPU), com offset de índices.
+// Telhados/estradas expandem pos(3) → pos(3)+cor(3) para o shader flat.
+void OSMManager::appendToBatch(const RawMesh& r) {
     if (r.verts.empty() || r.idx.empty()) return;
 
-    glGenVertexArrays(1, &g.vao);
-    glBindVertexArray(g.vao);
+    Batch& b = (r.type == BLDWALL) ? _walls[r.facadeVariant]
+             : (r.type == WATER)   ? _water
+                                   : _flat;
 
-    glGenBuffers(1, &g.vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 (GLsizeiptr)(r.verts.size() * sizeof(float)),
-                 r.verts.data(), GL_STATIC_DRAW);
+    uint32_t base = (uint32_t)(b.verts.size() / b.stride);
 
-    if (r.type == BLDWALL) {
-        // stride = 8 floats: pos(xyz) + normal(xyz) + uv(xy)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8*sizeof(float), (void*)(0));
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8*sizeof(float), (void*)(3*sizeof(float)));
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8*sizeof(float), (void*)(6*sizeof(float)));
-        glEnableVertexAttribArray(0);
-        glEnableVertexAttribArray(1);
-        glEnableVertexAttribArray(2);
+    if (r.type == BLDROOF || r.type == ROAD) {
+        size_t n = r.verts.size() / 3;
+        b.verts.reserve(b.verts.size() + n * 6);
+        for (size_t i = 0; i < n; i++) {
+            b.verts.push_back(r.verts[i*3]);
+            b.verts.push_back(r.verts[i*3+1]);
+            b.verts.push_back(r.verts[i*3+2]);
+            b.verts.push_back(r.flatColor.r);
+            b.verts.push_back(r.flatColor.g);
+            b.verts.push_back(r.flatColor.b);
+        }
     } else {
-        // stride = 3 floats: pos(xyz) only
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
+        b.verts.insert(b.verts.end(), r.verts.begin(), r.verts.end());
     }
 
-    glGenBuffers(1, &g.ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 (GLsizeiptr)(r.idx.size() * sizeof(uint32_t)),
-                 r.idx.data(), GL_STATIC_DRAW);
+    b.idx.reserve(b.idx.size() + r.idx.size());
+    for (uint32_t i : r.idx) b.idx.push_back(i + base);
+}
 
-    g.indexCount = (uint32_t)r.idx.size();
+// Sincroniza um batch com a GPU: envia só a região que cresceu desde o último
+// sync; realoca com folga de 1.5× quando a capacidade estoura (VAO continua
+// válido — o id do buffer não muda, glBufferData só troca o storage).
+void OSMManager::syncBatch(Batch& b) {
+    if (b.gpuVertCount == b.verts.size() && b.gpuIdxCount == b.idx.size()) return;
+    if (b.verts.empty() || b.idx.empty()) {
+        b.gpuVertCount = b.verts.size();
+        b.gpuIdxCount  = b.idx.size();
+        return;
+    }
+
+    if (!b.vao) {
+        glGenVertexArrays(1, &b.vao);
+        glGenBuffers(1, &b.vbo);
+        glGenBuffers(1, &b.ibo);
+        glBindVertexArray(b.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, b.vbo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, b.ibo);
+        GLsizei sb = b.stride * (GLsizei)sizeof(float);
+        if (b.stride == 8) {          // pos + normal + uv (paredes)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sb, (void*)(0));
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sb, (void*)(3*sizeof(float)));
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sb, (void*)(6*sizeof(float)));
+            glEnableVertexAttribArray(0);
+            glEnableVertexAttribArray(1);
+            glEnableVertexAttribArray(2);
+        } else if (b.stride == 6) {   // pos + cor (telhados/estradas)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sb, (void*)(0));
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sb, (void*)(3*sizeof(float)));
+            glEnableVertexAttribArray(0);
+            glEnableVertexAttribArray(1);
+        } else {                      // pos (água)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sb, (void*)0);
+            glEnableVertexAttribArray(0);
+        }
+    } else {
+        glBindVertexArray(b.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, b.vbo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, b.ibo);
+    }
+
+    if (b.verts.size() > b.gpuVertCap) {
+        b.gpuVertCap = (std::max)(b.verts.size() * 3 / 2, (size_t)4096);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(b.gpuVertCap * sizeof(float)),
+                     nullptr, GL_DYNAMIC_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        (GLsizeiptr)(b.verts.size() * sizeof(float)), b.verts.data());
+    } else if (b.verts.size() > b.gpuVertCount) {
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        (GLintptr)(b.gpuVertCount * sizeof(float)),
+                        (GLsizeiptr)((b.verts.size() - b.gpuVertCount) * sizeof(float)),
+                        b.verts.data() + b.gpuVertCount);
+    }
+
+    if (b.idx.size() > b.gpuIdxCap) {
+        b.gpuIdxCap = (std::max)(b.idx.size() * 3 / 2, (size_t)4096);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(b.gpuIdxCap * sizeof(uint32_t)),
+                     nullptr, GL_DYNAMIC_DRAW);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                        (GLsizeiptr)(b.idx.size() * sizeof(uint32_t)), b.idx.data());
+    } else if (b.idx.size() > b.gpuIdxCount) {
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,
+                        (GLintptr)(b.gpuIdxCount * sizeof(uint32_t)),
+                        (GLsizeiptr)((b.idx.size() - b.gpuIdxCount) * sizeof(uint32_t)),
+                        b.idx.data() + b.gpuIdxCount);
+    }
+
+    b.gpuVertCount = b.verts.size();
+    b.gpuIdxCount  = b.idx.size();
     glBindVertexArray(0);
 }
 
@@ -413,7 +492,10 @@ void OSMManager::uploadMesh(GpuMesh& g, const RawMesh& r) {
 
 void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
                         float dayT, float timeS) {
-    if (_meshes.empty()) return;
+    bool anyWall = false;
+    for (auto& b : _walls) if (b.gpuIdxCount) { anyWall = true; break; }
+    if (!anyWall && !_flat.gpuIdxCount && !_water.gpuIdxCount) return;
+
     glDisable(GL_CULL_FACE);
 
     // Polygon offset PEQUENO: poucas unidades bastam para vencer o terreno.
@@ -422,38 +504,53 @@ void OSMManager::render(const glm::mat4& VP, const glm::vec3& camPos,
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(-1.f, -3.f);
 
-    // ── Building walls ────────────────────────────────────────────────────────
-    glUseProgram(_wallProg);
-    glUniformMatrix4fv(glGetUniformLocation(_wallProg, "uVP"), 1, GL_FALSE,
-                       glm::value_ptr(VP));
-    glUniform1f(glGetUniformLocation(_wallProg, "uDay"), dayT);
-    glUniform3fv(glGetUniformLocation(_wallProg, "uAcPos"), 1, glm::value_ptr(camPos));
-    glUniform1i(glGetUniformLocation(_wallProg, "uTex"), 0);
-
-    for (auto& m : _meshes) {
-        if (m.type != BLDWALL || m.indexCount == 0) continue;
+    // ── Paredes: 5 draws (um por variante de fachada) ─────────────────────────
+    if (anyWall) {
+        glUseProgram(_wallProg);
+        glUniformMatrix4fv(glGetUniformLocation(_wallProg, "uVP"), 1, GL_FALSE,
+                           glm::value_ptr(VP));
+        glUniform1f(glGetUniformLocation(_wallProg, "uDay"), dayT);
+        glUniform3fv(glGetUniformLocation(_wallProg, "uAcPos"), 1, glm::value_ptr(camPos));
+        glUniform1i(glGetUniformLocation(_wallProg, "uTex"), 0);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, _facadeTex[m.facadeVariant]);
-        glBindVertexArray(m.vao);
-        glDrawElements(GL_TRIANGLES, (GLsizei)m.indexCount, GL_UNSIGNED_INT, nullptr);
+
+        for (int v = 0; v < 5; v++) {
+            Batch& b = _walls[v];
+            if (!b.gpuIdxCount) continue;
+            glBindTexture(GL_TEXTURE_2D, _facadeTex[v]);
+            glBindVertexArray(b.vao);
+            glDrawElements(GL_TRIANGLES, (GLsizei)b.gpuIdxCount, GL_UNSIGNED_INT, nullptr);
+        }
     }
 
-    // ── Roofs & roads (flat) ──────────────────────────────────────────────────
-    glUseProgram(_flatProg);
-    glUniformMatrix4fv(glGetUniformLocation(_flatProg, "uVP"), 1, GL_FALSE,
-                       glm::value_ptr(VP));
-    glUniform1f(glGetUniformLocation(_flatProg, "uDay"), dayT);
-    glUniform3fv(glGetUniformLocation(_flatProg, "uAcPos"), 1, glm::value_ptr(camPos));
-    GLint flatColor = glGetUniformLocation(_flatProg, "uColor");
-
-    for (auto& m : _meshes) {
-        if ((m.type != BLDROOF && m.type != ROAD) || m.indexCount == 0) continue;
-        glUniform3fv(flatColor, 1, glm::value_ptr(m.flatColor));
-        glBindVertexArray(m.vao);
-        glDrawElements(GL_TRIANGLES, (GLsizei)m.indexCount, GL_UNSIGNED_INT, nullptr);
+    // ── Telhados + estradas: 1 draw (cor por vértice) ─────────────────────────
+    if (_flat.gpuIdxCount) {
+        glUseProgram(_flatProg);
+        glUniformMatrix4fv(glGetUniformLocation(_flatProg, "uVP"), 1, GL_FALSE,
+                           glm::value_ptr(VP));
+        glUniform1f(glGetUniformLocation(_flatProg, "uDay"), dayT);
+        glUniform3fv(glGetUniformLocation(_flatProg, "uAcPos"), 1, glm::value_ptr(camPos));
+        glBindVertexArray(_flat.vao);
+        glDrawElements(GL_TRIANGLES, (GLsizei)_flat.gpuIdxCount, GL_UNSIGNED_INT, nullptr);
     }
 
-    // Water: desligado temporariamente
+    // ── Água: 1 draw (translúcida, sem depth write) ───────────────────────────
+    if (_water.gpuIdxCount) {
+        glUseProgram(_waterProg);
+        glUniformMatrix4fv(glGetUniformLocation(_waterProg, "uVP"), 1, GL_FALSE,
+                           glm::value_ptr(VP));
+        glUniform1f(glGetUniformLocation(_waterProg, "uDay"),  dayT);
+        glUniform1f(glGetUniformLocation(_waterProg, "uTime"), timeS);
+        glUniform3fv(glGetUniformLocation(_waterProg, "uAcPos"),  1, glm::value_ptr(camPos));
+        glUniform3fv(glGetUniformLocation(_waterProg, "uCamPos"), 1, glm::value_ptr(camPos));
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glBindVertexArray(_water.vao);
+        glDrawElements(GL_TRIANGLES, (GLsizei)_water.gpuIdxCount, GL_UNSIGNED_INT, nullptr);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
 
     glDisable(GL_POLYGON_OFFSET_FILL);
     glEnable(GL_CULL_FACE);
@@ -468,6 +565,16 @@ void OSMManager::cleanup() {
     if (_thread.joinable()) _thread.detach();
 
     clearMeshes();
+    auto delBatch = [](Batch& b) {
+        if (b.vao) glDeleteVertexArrays(1, &b.vao);
+        if (b.vbo) glDeleteBuffers(1, &b.vbo);
+        if (b.ibo) glDeleteBuffers(1, &b.ibo);
+        b.vao = b.vbo = b.ibo = 0;
+        b.gpuVertCap = b.gpuIdxCap = 0;
+    };
+    for (auto& b : _walls) delBatch(b);
+    delBatch(_flat);
+    delBatch(_water);
 
     if (_wallProg)  glDeleteProgram(_wallProg);
     if (_flatProg)  glDeleteProgram(_flatProg);
@@ -645,10 +752,14 @@ void OSMManager::buildGeometry(const std::string& json, int gen, RawBatch& out) 
             const RS* rs = findRoad(tags["highway"].get<std::string>());
             if (rs) addRoad(pts, rs->hw, rs->col, out);
         } else if (tags.contains("natural") && tags["natural"] == "water") {
-            if (pts.size() >= 3) addWater(pts, out);
+            // Só anéis fechados: way aberto (margem de multipolygon) earcutado
+            // como polígono vira triângulos degenerados atravessando a cidade
+            if (pts.size() >= 4 && pts.front() == pts.back())
+                addWater(pts, out);
         } else if (tags.contains("waterway")) {
             std::string ww = tags["waterway"].get<std::string>();
-            if ((ww == "river" || ww == "canal") && pts.size() >= 3)
+            if ((ww == "river" || ww == "canal") &&
+                pts.size() >= 4 && pts.front() == pts.back())
                 addWater(pts, out);
         }
     }

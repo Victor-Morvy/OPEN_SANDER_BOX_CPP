@@ -1209,6 +1209,27 @@ int main(){
             Hud::draw(view, proj, hd, fw, fh);
         }
 
+        // ── Warning LANDING GEAR (todas as câmeras) ───────────────────────────
+        // Config de pouso perigosa: trem não baixado + abaixo de 1000 ft AGL
+        // + manete < 50% (intenção de pouso). Pisca a 2 Hz em vermelho.
+        if (fdmOk && !paused && gearAnimPos < 0.99f
+            && tel.altAgl < 1000.0 && tel.throttle < 0.5) {
+            if (fmod(now, 0.5) < 0.35) {
+                ImDrawList* wdl = ImGui::GetBackgroundDrawList();
+                const char* wtxt = "LANDING GEAR";
+                const float wfs = 34.f;
+                ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(wfs, FLT_MAX, 0.f, wtxt);
+                ImVec2 p{(float)fw * 0.5f - ts.x * 0.5f, (float)fh * 0.30f};
+                wdl->AddRectFilled({p.x - 12.f, p.y - 6.f},
+                                   {p.x + ts.x + 12.f, p.y + ts.y + 6.f},
+                                   IM_COL32(40, 0, 0, 200), 4.f);
+                wdl->AddRect({p.x - 12.f, p.y - 6.f},
+                             {p.x + ts.x + 12.f, p.y + ts.y + 6.f},
+                             IM_COL32(255, 40, 40, 255), 4.f, 0, 2.f);
+                wdl->AddText(ImGui::GetFont(), wfs, p, IM_COL32(255, 40, 40, 255), wtxt);
+            }
+        }
+
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
         ImGui::SetNextWindowSize({260,560},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.75f);

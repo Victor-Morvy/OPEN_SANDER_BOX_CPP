@@ -79,15 +79,21 @@ void FlyByWire::update(float dt, const PilotInput& inp,
 
         float columnMod = inp.column;
 
-        // Pitch envelope: pushback no column quando além dos limites e stick neutro
+        // Pitch envelope: pushback quando além dos limites e stick neutro.
+        // Vai numa variável SEPARADA que não alimenta o integrador (só P/D):
+        // integrar o pushback funcionava como "trim de cabrar" — acumulava
+        // durante o mergulho todo e, como err=0 não descarrega o integrador,
+        // continuava puxando o nariz lá pra cima depois da recuperação
+        // (overshoot notado pelo Victor com pitch < -15°).
+        float envPush = 0.f;
         if (st.altAgl > 200.f) {
             constexpr float PITCH_CEIL  = 30.f, PITCH_FLOOR = -15.f;
             constexpr float ENV_KP = 0.02f,  ENV_DZ = 0.05f;
             if (std::abs(columnMod) < ENV_DZ) {
                 if (st.pitchDeg > PITCH_CEIL)
-                    columnMod -= std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
+                    envPush = -std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
                 else if (st.pitchDeg < PITCH_FLOOR)
-                    columnMod += std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
+                    envPush =  std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
             }
         }
 
@@ -115,11 +121,15 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             _prevPitchErr = 0.f;
             _initialized  = false;  // reinicializa quando decolar
         } else {
-            _cstarDem = _cstarAct + columnMod * gains.maxDemand;
+            _cstarDem = _cstarAct + (columnMod + envPush) * gains.maxDemand;
             _alphaFloor = false;
 
-            float err  = _cstarDem - _cstarAct;
-            _elevInteg += err * dt;
+            // err (P/D) inclui o pushback do envelope — zera sozinho quando o
+            // pitch volta pro envelope. errInteg (I) NÃO inclui: o integrador
+            // é o trim de longo prazo e só deve responder ao piloto/speed-stab.
+            float err      = _cstarDem - _cstarAct;
+            float errInteg = columnMod * gains.maxDemand;
+            _elevInteg += errInteg * dt;
             _elevInteg  = std::clamp(_elevInteg, -2.f, 2.f);
 
             float derr = (inp.column != 0.f) ? (err - _prevPitchErr) / dt : 0.f;

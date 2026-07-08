@@ -388,7 +388,11 @@ Telemetry FDM::getTelemetry() const
 
     if (_isE195) {
         t.gearPos  = getD("gear/unit[0]/pos-norm");
-        t.throttle = (getD("fadec/throttle-cmd[0]") + getD("fadec/throttle-cmd[1]")) * 0.5;
+        // COM barra inicial: "/fadec/..." e "fadec/..." são nós DIFERENTES no
+        // SimGear (ver CLAUDE.md). setControlsE195 escreve no nó com barra —
+        // ler o sem barra devolvia sempre 0 (throttle zerado no HUD).
+        t.throttle = (_exec->GetPropertyValue("/fadec/throttle-cmd[0]")
+                    + _exec->GetPropertyValue("/fadec/throttle-cmd[1]")) * 0.5;
         auto prop = _exec->GetPropulsion();
         for (int i = 0; i < 2; ++i) {
             auto turb = std::dynamic_pointer_cast<JSBSim::FGTurbine>(prop->GetEngine(i));

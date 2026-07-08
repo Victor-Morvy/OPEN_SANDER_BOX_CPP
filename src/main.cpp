@@ -292,8 +292,10 @@ static bool readJoystick(Axes& a, float dt){
         constexpr float CAM_ROT = 1.8f;
         a.camYaw   += -rX * CAM_ROT * dt;
         a.camPitch  = std::clamp(a.camPitch + rY * CAM_ROT * dt, -1.4f, 1.4f);
-    } else if (a.camMode != CamMode::External) {
-        // Modo cockpit/nariz (sem gatilhos) → olhar com a cabeça
+    } else if (a.camMode == CamMode::Cockpit) {
+        // Cabine (sem gatilhos) → olhar com a cabeça
+        // (Nose NÃO entra aqui: a câmera do HUD é fixa e o stick direito
+        // continua leme + manete, igual à visão externa)
         constexpr float HEAD_ROT = 1.5f;
         a.headYaw   = std::clamp(a.headYaw   + rX * HEAD_ROT * dt,  -1.2f,  1.2f);
         a.headPitch = std::clamp(a.headPitch + (-rY)* HEAD_ROT * dt, -0.6f,  0.5f);
@@ -902,8 +904,9 @@ int main(){
             fovDeg   = 80.f;
             nearClip = 0.05f;
         } else if (axes.camMode == CamMode::Nose) {
-            // Synthetic vision: olho solto no bico, sem modelo de cabine
-            view     = eyeView(tel, NOSE_EYE_LOCAL, axes.headYaw, axes.headPitch);
+            // Synthetic vision: olho solto no bico, sem modelo de cabine.
+            // Câmera FIXA (sem head-look) — o stick direito segue leme+manete.
+            view     = eyeView(tel, NOSE_EYE_LOCAL, 0.f, 0.f);
             fovDeg   = 80.f;
             nearClip = 0.05f;
         } else {

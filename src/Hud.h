@@ -15,6 +15,7 @@ struct Data {
     double     pitchRad = 0;      // pitch do avião (rad, + = nariz p/ cima)
     glm::vec3  velWorld{0.f};     // velocidade no frame render (X=E,Y=cima,Z=S)
     float      casKt    = 0.f;    // velocidade calibrada (kt)
+    float      mach     = 0.f;    // número de Mach
     float      altFt    = 0.f;    // altitude baro MSL (ft)
     float      vsFpm    = 0.f;    // velocidade vertical (fpm, + = subindo)
     float      raltFt   = 0.f;    // rádio-altitude / AGL (ft)

@@ -307,13 +307,18 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
         const float boxH = 30.f;
         char buf[16];
 
-        // CAS à esquerda
+        // CAS à esquerda + Mach logo abaixo (mesma coluna)
         snprintf(buf, sizeof(buf), "%d", (int)lroundf(d.casKt));
         {
             ImVec2 a{clipMin.x + 4.f, cy - boxH * 0.5f};
             ImVec2 b{a.x + 80.f, cy + boxH * 0.5f};
             hudBox(dl, a, b, buf);
             hudText(dl, {a.x, a.y - 24.f}, HUD_COL_DIM, "CAS KT");
+
+            snprintf(buf, sizeof(buf), ".%03d", (int)lroundf(d.mach * 1000.f));
+            ImVec2 ma{a.x, b.y + 10.f}, mb{b.x, b.y + 10.f + boxH};
+            hudBox(dl, ma, mb, buf);
+            hudText(dl, {ma.x, mb.y + 2.f}, HUD_COL_DIM, "MACH");
         }
 
         // Altitude à direita

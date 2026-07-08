@@ -26,6 +26,7 @@
 #include "MiniMap.h"
 #include "Navaids.h"
 #include "PFD.h"
+#include "Hud.h"
 
 #include <cstdio>
 #include <cmath>
@@ -1026,6 +1027,12 @@ int main(){
         ImGui::NewFrame();
 
         minimap.processUploads();   // sobe tiles OSM baixados p/ GPU (thread principal)
+
+        // ── HUD sintético (só na câmera Nose): pitch ladder + waterline ───────
+        // Conformal: usa a MESMA view/proj da cena, então os degraus alinham
+        // com o horizonte 3D e acompanham roll e head-look automaticamente.
+        if (axes.camMode == CamMode::Nose && fdmOk && !paused)
+            Hud::draw(view, proj, tel.yaw, tel.pitch, fw, fh);
 
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
         ImGui::SetNextWindowSize({260,560},ImGuiCond_Always);

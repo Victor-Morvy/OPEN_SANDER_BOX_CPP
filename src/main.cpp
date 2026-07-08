@@ -1031,11 +1031,14 @@ int main(){
 
         minimap.processUploads();   // sobe tiles OSM baixados p/ GPU (thread principal)
 
-        // ── HUD sintético (só na câmera Nose): pitch ladder + waterline ───────
+        // ── HUD sintético (só na câmera Nose): pitch ladder + waterline + FPV ─
         // Conformal: usa a MESMA view/proj da cena, então os degraus alinham
-        // com o horizonte 3D e acompanham roll e head-look automaticamente.
-        if (axes.camMode == CamMode::Nose && fdmOk && !paused)
-            Hud::draw(view, proj, tel.yaw, tel.pitch, fw, fh);
+        // com o horizonte 3D e acompanham o roll automaticamente.
+        if (axes.camMode == CamMode::Nose && fdmOk && !paused) {
+            // Velocidade NED → frame render (X=Leste, Y=cima, Z=Sul)
+            glm::vec3 velWorld{(float)tel.vEast, (float)-tel.vDown, (float)-tel.vNorth};
+            Hud::draw(view, proj, tel.yaw, tel.pitch, velWorld, fw, fh);
+        }
 
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
         ImGui::SetNextWindowSize({260,560},ImGuiCond_Always);

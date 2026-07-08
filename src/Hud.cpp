@@ -72,7 +72,8 @@ static void rungTick(ImDrawList* dl, const glm::mat4& vp, int fw, int fh,
 }
 
 void draw(const glm::mat4& view, const glm::mat4& proj,
-          double yawRad, double pitchRad, int fw, int fh) {
+          double yawRad, double pitchRad, const glm::vec3& velWorld,
+          int fw, int fh) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const glm::mat4 vp = proj * view;
     const float yaw = (float)yawRad;
@@ -140,6 +141,23 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
         dl->AddLine({c.x,           c.y},     {c.x + v * 0.7f, c.y + v}, wl, 3.f);
         dl->AddLine({c.x + v * 0.7f, c.y + v}, {c.x + v * 1.4f, c.y},    wl, 3.f);
         dl->AddLine({c.x + v * 1.4f, c.y},    {c.x + w,        c.y},     wl, 3.f);
+    }
+
+    // ── Flight path vector ───────────────────────────────────────────────────
+    // Direção do vetor VELOCIDADE (inclui alpha/beta/vento) — pra onde o
+    // avião realmente vai, não pra onde aponta. Voando coordenado ele senta
+    // no degrau do ângulo de trajetória; a distância vertical até a waterline
+    // é o alpha. Símbolo clássico: círculo + asinhas + cauda, px fixos.
+    // ~8 fps ≈ 5 kt: parado/taxiando devagar a direção não significa nada.
+    if (glm::dot(velWorld, velWorld) > 8.f * 8.f) {
+        ImVec2 f;
+        if (projDir(glm::normalize(velWorld), vp, fw, fh, f)) {
+            const float r = 8.f, wing = 14.f, tail = 8.f;
+            dl->AddCircle(f, r, HUD_COL, 24, 2.5f);
+            dl->AddLine({f.x - r,        f.y}, {f.x - r - wing, f.y}, HUD_COL, 2.5f);
+            dl->AddLine({f.x + r,        f.y}, {f.x + r + wing, f.y}, HUD_COL, 2.5f);
+            dl->AddLine({f.x, f.y - r}, {f.x, f.y - r - tail},        HUD_COL, 2.5f);
+        }
     }
 
     dl->PopClipRect();

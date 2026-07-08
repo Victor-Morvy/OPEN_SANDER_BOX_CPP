@@ -11,10 +11,15 @@ namespace Hud {
 // Pitch ladder (degraus a cada 5°, rotulados a cada 10°, tracejados abaixo
 // do horizonte) + linha d'água (waterline/boresight): símbolo fixo na
 // direção em que o NARIZ aponta (yaw+pitch do avião), não no centro da tela.
-// view/proj: câmera atual (Nose, já com head-look). yaw/pitch em rad
-// (convenção Telemetry/JSBSim: pitch + = nariz para cima).
+// + Flight path vector (círculo com asas e cauda): direção do vetor
+// VELOCIDADE — pra onde o avião está indo de fato (inclui alpha/beta/vento).
+// view/proj: câmera atual (Nose). yaw/pitch em rad (convenção
+// Telemetry/JSBSim: pitch + = nariz para cima). velWorld: velocidade no
+// frame render (X=Leste, Y=cima, Z=Sul) — só a direção importa; abaixo de
+// ~5 kt o FPV é omitido (direção sem significado no solo parado).
 // Deve ser chamado entre ImGui::NewFrame() e ImGui::Render().
 void draw(const glm::mat4& view, const glm::mat4& proj,
-          double yawRad, double pitchRad, int fw, int fh);
+          double yawRad, double pitchRad, const glm::vec3& velWorld,
+          int fw, int fh);
 
 }

@@ -79,21 +79,32 @@ void FlyByWire::update(float dt, const PilotInput& inp,
 
         float columnMod = inp.column;
 
-        // Pitch envelope: pushback quando além dos limites e stick neutro.
-        // Vai numa variável SEPARADA que não alimenta o integrador (só P/D):
-        // integrar o pushback funcionava como "trim de cabrar" — acumulava
-        // durante o mergulho todo e, como err=0 não descarrega o integrador,
-        // continuava puxando o nariz lá pra cima depois da recuperação
-        // (overshoot notado pelo Victor com pitch < -15°).
-        float envPush = 0.f;
+        // Pitch envelope: DEMANDA DE TAXA de recuperação fechada na taxa real
+        // (não pushback aberto proporcional à excursão). O pushback antigo
+        // saturava o profundor sem nenhum amortecimento: o avião ganhava taxa
+        // de arfagem enorme, cruzava o limite com toda a rotação sobrando,
+        // ativava a proteção do lado oposto — e dava looping (bug do Victor).
+        // Agora: qDem = clamp(0.6/s × excursão, ±6 °/s) → errEnv em unidades
+        // de C* = cstarK × (qDem − q). Como qDem → 0 na fronteira, a lei
+        // FREIA a rotação ANTES de satisfazer a proteção — o profundor
+        // corrige/solta exatamente quando o pitch volta pro envelope, sem
+        // taxa residual pra causar overshoot. Não alimenta o integrador
+        // (transitório ≠ trim — ver fix anterior).
+        float envErr = 0.f;
         if (st.altAgl > 200.f) {
-            constexpr float PITCH_CEIL  = 30.f, PITCH_FLOOR = -15.f;
-            constexpr float ENV_KP = 0.02f,  ENV_DZ = 0.05f;
+            constexpr float PITCH_CEIL = 30.f, PITCH_FLOOR = -15.f;
+            constexpr float ENV_DZ = 0.05f;
+            constexpr float ENV_RATE_KP  = 0.6f;   // (°/s) por ° de excursão
+            constexpr float ENV_MAX_RATE = 6.f;    // taxa máx de recuperação °/s
             if (std::abs(columnMod) < ENV_DZ) {
-                if (st.pitchDeg > PITCH_CEIL)
-                    envPush = -std::clamp(ENV_KP * (st.pitchDeg - PITCH_CEIL),  0.f, 0.5f);
-                else if (st.pitchDeg < PITCH_FLOOR)
-                    envPush =  std::clamp(ENV_KP * (PITCH_FLOOR - st.pitchDeg), 0.f, 0.5f);
+                float over = 0.f;                   // + = precisa cabrar
+                if      (st.pitchDeg > PITCH_CEIL)  over = PITCH_CEIL  - st.pitchDeg;
+                else if (st.pitchDeg < PITCH_FLOOR) over = PITCH_FLOOR - st.pitchDeg;
+                if (over != 0.f) {
+                    float qDem = std::clamp(ENV_RATE_KP * over,
+                                            -ENV_MAX_RATE, ENV_MAX_RATE);
+                    envErr = gains.cstarK * (qDem - st.pitchRateDegS) * DEG2RAD;
+                }
             }
         }
 
@@ -121,12 +132,13 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             _prevPitchErr = 0.f;
             _initialized  = false;  // reinicializa quando decolar
         } else {
-            _cstarDem = _cstarAct + (columnMod + envPush) * gains.maxDemand;
+            _cstarDem = _cstarAct + columnMod * gains.maxDemand + envErr;
             _alphaFloor = false;
 
-            // err (P/D) inclui o pushback do envelope — zera sozinho quando o
-            // pitch volta pro envelope. errInteg (I) NÃO inclui: o integrador
-            // é o trim de longo prazo e só deve responder ao piloto/speed-stab.
+            // err (P/D) inclui a demanda do envelope — regulada na taxa real,
+            // zera quando o pitch volta pro envelope com a rotação já freada.
+            // errInteg (I) NÃO inclui: o integrador é o trim de longo prazo e
+            // só deve responder ao piloto/speed-stab.
             float err      = _cstarDem - _cstarAct;
             float errInteg = columnMod * gains.maxDemand;
             _elevInteg += errInteg * dt;

@@ -9,6 +9,7 @@ void FlyByWire::reset()
     _cstarDem     = 1.f;
     _cstarAct     = 1.f;
     _alphaFloor   = false;
+    _envActive    = 0;
     _targetBank   = 0.f;
     _prevRollErr  = 0.f;
     _bankProt     = false;
@@ -67,6 +68,7 @@ void FlyByWire::update(float dt, const PilotInput& inp,
         _prevPitchErr = 0.f;
         _initialized  = false;
         _alphaFloor   = false;
+        _envActive    = 0;
     } else {
         float q_rps = st.pitchRateDegS * DEG2RAD;
         _cstarAct = st.loadFactorNz + gains.cstarK * q_rps;
@@ -80,46 +82,67 @@ void FlyByWire::update(float dt, const PilotInput& inp,
         float columnMod = inp.column;
 
         // Pitch envelope: DEMANDA DE TAXA de recuperação fechada na taxa real
-        // (não pushback aberto proporcional à excursão). O pushback antigo
-        // saturava o profundor sem nenhum amortecimento: o avião ganhava taxa
-        // de arfagem enorme, cruzava o limite com toda a rotação sobrando,
-        // ativava a proteção do lado oposto — e dava looping (bug do Victor).
-        // Agora: qDem = clamp(0.6/s × excursão, ±6 °/s) → errEnv em unidades
-        // de C* = cstarK × (qDem − q). Como qDem → 0 na fronteira, a lei
-        // FREIA a rotação ANTES de satisfazer a proteção — o profundor
-        // corrige/solta exatamente quando o pitch volta pro envelope, sem
-        // taxa residual pra causar overshoot. Não alimenta o integrador
-        // (transitório ≠ trim — ver fix anterior).
+        // (não pushback aberto — o pushback proporcional saturava o profundor
+        // sem damping, o avião cruzava o limite com rotação enorme sobrando e
+        // dava looping entre as duas proteções).
+        //
+        // COM ESTADO + HISTERESE (_envActive): liga/desliga exatamente na
+        // fronteira fazia o profundor "brigar" (chattering) pairando em
+        // 30°/−15° — qualquer cruzamento minúsculo alternava entre um chute
+        // de cstarK×(qDem−q) e zero. Agora: engaja ao cruzar o limite, mas o
+        // ALVO de recuperação fica ENV_MARGIN dentro do envelope, e só solta
+        // quando chegou no alvo COM a rotação freada (|q| < 1°/s) — o ponto
+        // de desligamento fica longe da superfície de chaveamento e o
+        // desengate acontece com envErr ≈ 0 (sem degrau no profundor).
+        // Não alimenta o integrador (transitório ≠ trim).
         float envErr = 0.f;
-        if (st.altAgl > 200.f) {
+        {
             constexpr float PITCH_CEIL = 30.f, PITCH_FLOOR = -15.f;
-            constexpr float ENV_DZ = 0.05f;
-            constexpr float ENV_RATE_KP  = 0.6f;   // (°/s) por ° de excursão
+            constexpr float ENV_DZ       = 0.05f;
+            constexpr float ENV_MARGIN   = 2.f;    // alvo: 2° dentro do envelope
+            constexpr float ENV_RATE_KP  = 0.6f;   // (°/s) por ° até o alvo
             constexpr float ENV_MAX_RATE = 6.f;    // taxa máx de recuperação °/s
-            if (std::abs(columnMod) < ENV_DZ) {
-                float over = 0.f;                   // + = precisa cabrar
-                if      (st.pitchDeg > PITCH_CEIL)  over = PITCH_CEIL  - st.pitchDeg;
-                else if (st.pitchDeg < PITCH_FLOOR) over = PITCH_FLOOR - st.pitchDeg;
-                if (over != 0.f) {
-                    float qDem = std::clamp(ENV_RATE_KP * over,
-                                            -ENV_MAX_RATE, ENV_MAX_RATE);
-                    envErr = gains.cstarK * (qDem - st.pitchRateDegS) * DEG2RAD;
+
+            bool inhibit = st.altAgl <= 200.f || std::abs(columnMod) >= ENV_DZ;
+            if (inhibit) {
+                _envActive = 0;                     // piloto tem autoridade total
+            } else if (_envActive == 0) {
+                if      (st.pitchDeg > PITCH_CEIL)  _envActive = +1;
+                else if (st.pitchDeg < PITCH_FLOOR) _envActive = -1;
+            }
+
+            if (_envActive != 0) {
+                float target = (_envActive > 0) ? PITCH_CEIL  - ENV_MARGIN
+                                                : PITCH_FLOOR + ENV_MARGIN;
+                float qDem = std::clamp(ENV_RATE_KP * (target - st.pitchDeg),
+                                        -ENV_MAX_RATE, ENV_MAX_RATE);
+                envErr = gains.cstarK * (qDem - st.pitchRateDegS) * DEG2RAD;
+
+                bool reached = (_envActive > 0) ? (st.pitchDeg <= target)
+                                                : (st.pitchDeg >= target);
+                if (reached && std::abs(st.pitchRateDegS) < 1.f) {
+                    _envActive = 0;
+                    envErr     = 0.f;
                 }
             }
         }
 
         // Estabilidade de velocidade (soft, atua mesmo com stick ativo):
-        //   overspeed  (>330 kt) → comanda nariz para cima
-        //   underspeed (<150 kt) → comanda nariz para baixo, SOMENTE se:
+        //   overspeed  (>spdVHi) → comanda nariz para cima
+        //   underspeed (<spdVLo) → comanda nariz para baixo, SOMENTE se:
         //     gear UP  E  (flaps ≤ curso 1  OU  speed brake aberto)
         //   Em configuração de pouso (gear down / flaps estendidos) não empurra
         //   o nariz — voo lento é intencional nessa configuração.
+        // Em var SEPARADA que NÃO alimenta o integrador (mesma lição do pitch
+        // envelope): integrada, virava trim acumulado que continuava puxando
+        // o nariz muito depois da velocidade voltar pro envelope.
+        float spdStab = 0.f;
         bool sbkOpen  = !st.wow && inp.brake > 0.05f && inp.flaps < (1.f/3.f);
         bool cleanCfg = inp.flaps <= (1.f/6.f + 0.01f) || sbkOpen;
         if (st.casKt > gains.spdVHi)
-            columnMod += std::min(0.5f, gains.spdStabK * (st.casKt - gains.spdVHi));
+            spdStab =  std::min(0.25f, gains.spdStabK * (st.casKt - gains.spdVHi));
         else if (st.casKt < gains.spdVLo && !inp.gearCmd && cleanCfg)
-            columnMod -= std::min(0.5f, gains.spdStabK * (gains.spdVLo - st.casKt));
+            spdStab = -std::min(0.25f, gains.spdStabK * (gains.spdVLo - st.casKt));
 
         columnMod = std::clamp(columnMod, -1.f, 1.f);
 
@@ -131,14 +154,14 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             _elevInteg    = 0.f;
             _prevPitchErr = 0.f;
             _initialized  = false;  // reinicializa quando decolar
+            _envActive    = 0;
         } else {
-            _cstarDem = _cstarAct + columnMod * gains.maxDemand + envErr;
+            _cstarDem = _cstarAct + (columnMod + spdStab) * gains.maxDemand + envErr;
             _alphaFloor = false;
 
-            // err (P/D) inclui a demanda do envelope — regulada na taxa real,
-            // zera quando o pitch volta pro envelope com a rotação já freada.
-            // errInteg (I) NÃO inclui: o integrador é o trim de longo prazo e
-            // só deve responder ao piloto/speed-stab.
+            // err (P/D) inclui envelope + speed-stab — proteções transitórias
+            // que zeram sozinhas quando o estado volta pro envelope.
+            // errInteg (I) é SÓ o piloto: o integrador é o trim de longo prazo.
             float err      = _cstarDem - _cstarAct;
             float errInteg = columnMod * gains.maxDemand;
             _elevInteg += errInteg * dt;

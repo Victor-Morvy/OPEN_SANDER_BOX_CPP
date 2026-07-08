@@ -17,7 +17,7 @@ static float frand() { return (float)rand() / RAND_MAX * 2.f - 1.f; }
 
 // ── 1. Estabilidade de velocidade (underspeed) por configuração ──────────────
 static void testSpeedStability() {
-    printf("\n== FBW: estabilidade de velocidade (140 kt, stick neutro) ==\n");
+    printf("\n== FBW: estabilidade de velocidade (spdVLo-10 kt, stick neutro) ==\n");
     struct Cfg { const char* name; bool gearDown; float flaps; float brake; bool expect; };
     const Cfg cfgs[] = {
         {"limpo (flaps 0, gear up)",      false, 0.f,     0.f, true },
@@ -31,7 +31,8 @@ static void testSpeedStability() {
         FlyByWire::PilotInput inp;
         inp.gearCmd = c.gearDown; inp.flaps = c.flaps; inp.brake = c.brake;
         FlyByWire::AircraftState st;
-        st.casKt = 140.f; st.altAgl = 5000.f; st.loadFactorNz = 1.f;
+        st.casKt = fbw.gains.spdVLo - 10.f;   // relativo ao limiar configurado
+        st.altAgl = 5000.f; st.loadFactorNz = 1.f;
         FlyByWire::SurfaceCmd out;
         for (int i = 0; i < 50; i++) fbw.update(0.02f, inp, st, out);
         bool prot = out.elevLH > 0.05f;   // elevator + = picar
@@ -39,15 +40,15 @@ static void testSpeedStability() {
     }
 }
 
-// ── 2. Ruído no limiar de 150 kt ──────────────────────────────────────────────
+// ── 2. Ruído no limiar de underspeed ──────────────────────────────────────────
 static void testThresholdNoise() {
-    printf("\n== FBW: chattering no limiar 150 kt (ruido +-1 kt) ==\n");
+    printf("\n== FBW: chattering no limiar de spdVLo (ruido +-1 kt) ==\n");
     FlyByWire fbw;
     FlyByWire::PilotInput inp;
     float emin = 9.f, emax = -9.f;
     for (float t = 0.f; t < 30.f; t += 0.02f) {
         FlyByWire::AircraftState st;
-        st.casKt = 150.f + frand();
+        st.casKt = fbw.gains.spdVLo + frand();
         st.altAgl = 8000.f; st.loadFactorNz = 1.f + 0.02f*frand();
         st.pitchRateDegS = 0.2f*frand();
         FlyByWire::SurfaceCmd out;

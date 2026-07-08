@@ -97,10 +97,12 @@ public:
         float betaKi     = 0.06f;  // I: integrador elimina beta residual em regime
         float betaFiltA  = 0.80f;  // alfa do filtro passa-baixo do beta (0=sem filtro)
 
-        // Estabilidade de velocidade (Normal Law)
-        float spdVHi   = 330.f;   // kt — acima disso, comanda nariz para cima
-        float spdVLo   = 150.f;   // kt — abaixo (com gear UP), nariz para baixo
-        float spdStabK = 0.008f;  // column por kt além do limiar (soft, ±0.5 máx)
+        // Estabilidade de velocidade (Normal Law) — envelope alargado e ganho
+        // suavizado a pedido do Victor (330/150 com K=0.008 integrado puxava
+        // o nariz de forma intrusiva); atua só no caminho P/D, sem trim.
+        float spdVHi   = 350.f;   // kt — acima disso, comanda nariz para cima
+        float spdVLo   = 130.f;   // kt — abaixo (com gear UP), nariz para baixo
+        float spdStabK = 0.004f;  // column por kt além do limiar (soft, ±0.25 máx)
     } gains;
 
     // ── Interface principal ───────────────────────────────────────────────────
@@ -141,6 +143,7 @@ private:
     float _cstarDem     = 1.f;
     float _cstarAct     = 1.f;
     bool  _alphaFloor   = false;
+    int   _envActive    = 0;     // pitch envelope engajado: +1 teto, -1 piso, 0 não
 
     // Estado rolagem
     float _targetBank   = 0.f;

@@ -16,6 +16,7 @@ struct Data {
     glm::vec3  velWorld{0.f};     // velocidade no frame render (X=E,Y=cima,Z=S)
     float      casKt    = 0.f;    // velocidade calibrada (kt)
     float      altFt    = 0.f;    // altitude baro MSL (ft)
+    float      vsFpm    = 0.f;    // velocidade vertical (fpm, + = subindo)
     float      raltFt   = 0.f;    // rádio-altitude / AGL (ft)
     float      gearPos  = 1.f;    // 0=recolhido, 1=baixado (posição animada)
     bool       reverser = false;  // reversor DEPLOYADO (estado real pós-FBW)
@@ -27,8 +28,8 @@ struct Data {
 //  - waterline ─\_/─ na direção do NARIZ (yaw+pitch) — conformal
 //  - flight path vector (círculo+asas+cauda) na direção da VELOCIDADE —
 //    conformal; omitido abaixo de ~5 kt
-//  - fita de heading no topo (ticks 5°/10°, rótulos, caret central)
-//  - caixa de velocidade (CAS) à esquerda, altitude (MSL) à direita
+//  - caixa de heading no topo (box digital %03d, mesma linguagem das demais)
+//  - caixa de velocidade (CAS) à esquerda; altitude (MSL) e V/S à direita
 //  - bloco inferior direito: RALT, GEAR UP/DOWN, REV (se ativo), THR %
 // Deve ser chamado entre ImGui::NewFrame() e ImGui::Render().
 void draw(const glm::mat4& view, const glm::mat4& proj, const Data& d,

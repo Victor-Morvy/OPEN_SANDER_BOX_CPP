@@ -11,6 +11,23 @@ static constexpr float D2R = 3.14159265358979323846f / 180.f;
 static const ImU32 HUD_COL     = IM_COL32(30, 255, 100, 220);
 static const ImU32 HUD_COL_DIM = IM_COL32(30, 255, 100, 150);
 
+// Fonte do HUD: default do ImGui ampliada (AddText com tamanho explícito) —
+// os 13px padrão ficavam pequenos demais lendo o combiner em voo.
+static constexpr float FS = 20.f;
+static ImVec2 hudTextSize(const char* s) {
+    return ImGui::GetFont()->CalcTextSizeA(FS, FLT_MAX, 0.f, s);
+}
+static void hudText(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* s) {
+    dl->AddText(ImGui::GetFont(), FS, pos, col, s);
+}
+
+// Caixa digital (CAS/ALT/HDG/VS): retângulo com valor alinhado à direita.
+static void hudBox(ImDrawList* dl, ImVec2 a, ImVec2 b, const char* val) {
+    dl->AddRect(a, b, HUD_COL, 2.f, 0, 2.f);
+    ImVec2 ts = hudTextSize(val);
+    hudText(dl, {b.x - ts.x - 6.f, (a.y + b.y) * 0.5f - ts.y * 0.5f}, HUD_COL, val);
+}
+
 // Direção no mundo (frame render: X=Leste, Y=cima, Z=Sul; North=-Z) para um
 // heading/pitch dados — mesma fórmula do aircraftForward() do main.cpp.
 static glm::vec3 dirWorld(float yaw, float pitch) {
@@ -117,12 +134,12 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
         // Rótulo nas duas pontas dos múltiplos de 10°
         if (major && p != 0) {
             snprintf(lbl, sizeof(lbl), "%d", p > 0 ? p : -p);
-            ImVec2 ts = ImGui::CalcTextSize(lbl);
+            ImVec2 ts = hudTextSize(lbl);
             ImVec2 e;
             if (projDir(rungPoint(yaw, (float)p, -(halfW + 1.5f)), vp, fw, fh, e))
-                dl->AddText({e.x - ts.x, e.y - ts.y * 0.5f}, col, lbl);
+                hudText(dl, {e.x - ts.x, e.y - ts.y * 0.5f}, col, lbl);
             if (projDir(rungPoint(yaw, (float)p,  halfW + 1.5f), vp, fw, fh, e))
-                dl->AddText({e.x, e.y - ts.y * 0.5f}, col, lbl);
+                hudText(dl, {e.x, e.y - ts.y * 0.5f}, col, lbl);
         }
     }
 
@@ -159,58 +176,51 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
         }
     }
 
-    // ── Fita de heading (topo do combiner, fixa na tela) ────────────────────
-    // Janela de ±25°, tick a cada 5°, rótulo %03d a cada 10°, caret central
-    // apontando para baixo na proa atual.
+    // ── Caixa de heading (topo do combiner, centralizada) ───────────────────
+    // Mesma linguagem visual das caixas de CAS/ALT: box digital com a proa
+    // %03d e rótulo discreto.
     {
-        float hdgDeg = fmodf((float)(d.yawRad / D2R) + 360.f, 360.f);
+        char buf[8];
+        int hdg = (int)lroundf(fmodf((float)(d.yawRad / D2R) + 360.f, 360.f)) % 360;
+        snprintf(buf, sizeof(buf), "%03d", hdg);
         float cx = (clipMin.x + clipMax.x) * 0.5f;
-        float y0 = clipMin.y + 14.f;
-        float pxPerDeg = (clipMax.x - clipMin.x) / 50.f;
-
-        dl->AddLine({clipMin.x, y0}, {clipMax.x, y0}, HUD_COL_DIM, 1.5f);
-        int h0 = (int)floorf((hdgDeg - 25.f) / 5.f) * 5;
-        for (int h = h0; h <= h0 + 55; h += 5) {
-            float diff = fmodf((float)h - hdgDeg + 540.f, 360.f) - 180.f;
-            if (fabsf(diff) > 25.f) continue;
-            float x = cx + diff * pxPerDeg;
-            bool major = (h % 10 == 0);
-            dl->AddLine({x, y0}, {x, y0 + (major ? 11.f : 6.f)}, HUD_COL, major ? 2.f : 1.5f);
-            if (major) {
-                snprintf(lbl, sizeof(lbl), "%03d", ((h % 360) + 360) % 360);
-                ImVec2 ts = ImGui::CalcTextSize(lbl);
-                dl->AddText({x - ts.x * 0.5f, y0 + 13.f}, HUD_COL, lbl);
-            }
-        }
-        // Caret da proa atual (aponta pra baixo, tocando a linha da fita)
-        dl->AddTriangleFilled({cx, y0}, {cx - 6.f, y0 - 9.f}, {cx + 6.f, y0 - 9.f},
-                              HUD_COL);
+        const float w = 72.f, h = 30.f;
+        ImVec2 a{cx - w * 0.5f, clipMin.y + 24.f}, b{cx + w * 0.5f, clipMin.y + 24.f + h};
+        hudBox(dl, a, b, buf);
+        ImVec2 tl = hudTextSize("HDG");
+        hudText(dl, {cx - tl.x * 0.5f, a.y - tl.y - 2.f}, HUD_COL_DIM, "HDG");
     }
 
-    // ── Caixas de velocidade (esquerda) e altitude (direita) ────────────────
+    // ── Caixas de velocidade (esquerda), altitude e V/S (direita) ───────────
     {
         float cy = (clipMin.y + clipMax.y) * 0.5f;
+        const float boxH = 30.f;
         char buf[16];
 
         // CAS à esquerda
         snprintf(buf, sizeof(buf), "%d", (int)lroundf(d.casKt));
         {
-            ImVec2 a{clipMin.x + 4.f, cy - 14.f}, b{clipMin.x + 4.f + 64.f, cy + 14.f};
-            dl->AddRect(a, b, HUD_COL, 2.f, 0, 2.f);
-            ImVec2 ts = ImGui::CalcTextSize(buf);
-            dl->AddText({b.x - ts.x - 6.f, cy - ts.y * 0.5f}, HUD_COL, buf);
-            dl->AddText({a.x, a.y - 18.f}, HUD_COL_DIM, "CAS KT");
+            ImVec2 a{clipMin.x + 4.f, cy - boxH * 0.5f};
+            ImVec2 b{a.x + 80.f, cy + boxH * 0.5f};
+            hudBox(dl, a, b, buf);
+            hudText(dl, {a.x, a.y - 24.f}, HUD_COL_DIM, "CAS KT");
         }
 
         // Altitude à direita
         snprintf(buf, sizeof(buf), "%d", (int)lroundf(d.altFt));
         {
-            ImVec2 a{clipMax.x - 4.f - 76.f, cy - 14.f}, b{clipMax.x - 4.f, cy + 14.f};
-            dl->AddRect(a, b, HUD_COL, 2.f, 0, 2.f);
-            ImVec2 ts = ImGui::CalcTextSize(buf);
-            dl->AddText({b.x - ts.x - 6.f, cy - ts.y * 0.5f}, HUD_COL, buf);
-            ImVec2 tl = ImGui::CalcTextSize("ALT FT");
-            dl->AddText({b.x - tl.x, a.y - 18.f}, HUD_COL_DIM, "ALT FT");
+            ImVec2 a{clipMax.x - 4.f - 96.f, cy - boxH * 0.5f};
+            ImVec2 b{clipMax.x - 4.f, cy + boxH * 0.5f};
+            hudBox(dl, a, b, buf);
+            ImVec2 tl = hudTextSize("ALT FT");
+            hudText(dl, {b.x - tl.x, a.y - 24.f}, HUD_COL_DIM, "ALT FT");
+
+            // V/S logo abaixo da altitude (mesma coluna)
+            snprintf(buf, sizeof(buf), "%+d", (int)lroundf(d.vsFpm));
+            ImVec2 va{a.x, b.y + 10.f}, vb{b.x, b.y + 10.f + boxH};
+            hudBox(dl, va, vb, buf);
+            ImVec2 vl = hudTextSize("VS FPM");
+            hudText(dl, {vb.x - vl.x, vb.y + 2.f}, HUD_COL_DIM, "VS FPM");
         }
     }
 
@@ -218,12 +228,12 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
     // RALT | GEAR UP/DOWN | REV (se deployado) | THR %
     {
         char buf[24];
-        float lineH = ImGui::GetTextLineHeight() + 3.f;
+        float lineH = FS + 4.f;
         float x1 = clipMax.x - 6.f;
         float y  = clipMax.y - 6.f - lineH * 4.f;
         auto textR = [&](ImU32 col, const char* s){
-            ImVec2 ts = ImGui::CalcTextSize(s);
-            dl->AddText({x1 - ts.x, y}, col, s);
+            ImVec2 ts = hudTextSize(s);
+            hudText(dl, {x1 - ts.x, y}, col, s);
             y += lineH;
         };
 

@@ -1064,6 +1064,7 @@ int main(){
             hd.velWorld = {(float)tel.vEast, (float)-tel.vDown, (float)-tel.vNorth};
             hd.casKt    = (float)tel.cas;
             hd.altFt    = (float)tel.altBaro;
+            hd.vsFpm    = (float)tel.vsFpm;
             hd.raltFt   = (float)tel.altAgl;
             hd.gearPos  = gearAnimPos;
             hd.reverser = surfCmd.reverser;
@@ -1348,9 +1349,9 @@ int main(){
         }
 
         // ── PFD: velocidade | atitude (+bank/slip-skid) | altitude | V/S ────────
-        // Sempre no canto inferior direito, em qualquer câmera (External,
-        // Cockpit ou Nose) — pedido explícito do Victor.
-        if (fdmOk && !paused) {
+        // Canto inferior direito nas câmeras External/Cockpit; escondido na
+        // Nose — o HUD sintético já mostra tudo (evita informação duplicada).
+        if (fdmOk && !paused && axes.camMode != CamMode::Nose) {
             const float pfdH = 220.f, pfdW = 360.f;
             ImGui::SetNextWindowPos({(float)(fw - pfdW - 8.f), (float)fh - pfdH - 8.f},
                                     ImGuiCond_Always);

@@ -438,6 +438,48 @@ static void updateAxes(Axes& a, GLFWwindow* w, float dt){
 
 struct WorldPos { double x=0, y=0, z=0; };
 
+// ── ILS sintético ─────────────────────────────────────────────────────────────
+// Um "approach" = cabeceira (world XZ + elev) + proa de pouso. Os desvios são
+// calculados por frame contra a posição do avião — sem estação/frequência,
+// geometria pura (por isso "sintético").
+
+struct AppCand {
+    std::string label;                 // ex.: "SBGL 10"
+    double thrX = 0, thrZ = 0;         // cabeceira em world (m)
+    float  thrElevM  = 0.f;            // elevação MSL da cabeceira
+    float  courseDeg = 0.f;            // proa de POUSO (true)
+    // Calculado por frame:
+    float distNm = 0, locDevDeg = 0, gsDevDeg = 0;
+    float courseDiff = 0, alongM = 0, todDistM = 0;
+    bool  valid = false;
+};
+
+// Desvios estilo ILS. Convenção fly-to:
+//   locDevDeg + = voar PARA A DIREITA (centerline à direita do avião)
+//   gsDevDeg  + = voar PARA CIMA (abaixo do glide de 3°)
+// Antena do localizer simulada 3 km além da cabeceira (afunila perto da pista
+// como um LOC real). todDistM = distância da cabeceira onde a rampa de 3°
+// cruza a ALTURA ATUAL do avião em relação à pista (ponto de início de descida).
+static void computeApproachDevs(AppCand& a, double acX, double acZ,
+                                float acMslM, float hdgDeg)
+{
+    const float D2Rf = (float)(1.0 / RAD2DEG);
+    float lx = sinf(a.courseDeg * D2Rf), lz = -cosf(a.courseDeg * D2Rf);
+    double dx = acX - a.thrX, dz = acZ - a.thrZ;
+    float along = (float)(-(dx * lx + dz * lz));       // m antes da cabeceira
+    float cross = (float)(dx * (-lz) + dz * lx);       // + = à direita da centerline
+    a.alongM    = along;
+    a.locDevDeg = atan2f(-cross, along + 3000.f) * (float)RAD2DEG;
+    float h       = acMslM - a.thrElevM;
+    float gsAngle = atan2f(h, std::max(along, 1.f)) * (float)RAD2DEG;
+    a.gsDevDeg  = 3.f - gsAngle;
+    a.distNm    = sqrtf(along * along + cross * cross) / 1852.f;
+    a.courseDiff = fabsf(fmodf(a.courseDeg - hdgDeg + 540.f, 360.f) - 180.f);
+    a.todDistM  = std::max(h, 0.f) / tanf(3.f * D2Rf);
+    a.valid = along > 300.f && a.distNm < 25.f &&
+              fabsf(a.locDevDeg) < 8.f && a.courseDiff < 40.f;
+}
+
 static void integratePos(WorldPos& p, const Telemetry& t, double dt){
     p.x += t.vEast  * FT2M * dt;    // East  → +X
     p.z -= t.vNorth * FT2M * dt;    // North → -Z  (convenção render)
@@ -648,6 +690,17 @@ int main(){
     bool            guidancePanelOpen = false;
     MiniMap         minimap;
     bool            showMinimap       = true;   // tecla M
+
+    // ── ILS sintético ──────────────────────────────────────────────────────
+    // ilsArmed/ilsArmedApp: approach escolhido no mapa (menu de pausa).
+    // ilsDisp: até 2 approaches pra desenhar no HUD (armado + melhor auto,
+    // ou os 2 autos mais alinhados — ex. pistas paralelas).
+    // ilsPfd: índice em ilsDisp do mais alinhado no yaw (cruzeta do PFD).
+    bool             ilsArmed = false;
+    AppCand          ilsArmedApp;
+    AppCand          ilsDisp[2];
+    int              ilsNDisp = 0, ilsPfd = -1;
+    MiniMap::RwyPick lastRwyPick;   // última cabeceira clicada no picker
     float           viewDistScale     = 1.0f;   // 1=dia claro real, >1=ar mais limpo
     FlyByWire::SurfaceCmd surfCmd;
 
@@ -911,6 +964,66 @@ int main(){
             glBufferSubData(GL_ARRAY_BUFFER,0,(GLsizeiptr)(ptData.size()*sizeof(float)),ptData.data());
         }
 
+        // ── ILS sintético: armado + candidatos automáticos por alinhamento ────
+        ilsNDisp = 0; ilsPfd = -1;
+        if (fdmOk) {
+            float hdgDeg = (float)fmod(tel.yaw * RAD2DEG + 360.0, 360.0);
+            if (ilsArmed) {
+                computeApproachDevs(ilsArmedApp, wpos.x, wpos.z, acMslM, hdgDeg);
+                // Armado: gate relaxado — vale sempre que estiver do lado da
+                // aproximação, mesmo desalinhado (o piloto ainda vai interceptar)
+                ilsArmedApp.valid = ilsArmedApp.alongM > 100.f
+                                 && ilsArmedApp.distNm < 40.f;
+                if (ilsArmedApp.valid) ilsDisp[ilsNDisp++] = ilsArmedApp;
+            }
+            // Autos: as duas cabeceiras de cada pista num raio de 25 NM,
+            // filtradas por alinhamento (computeApproachDevs.valid)
+            static std::vector<AirportManager::RwySeg> ilsRs;
+            airports.getRunwaysNear(acWorld, 46300.f, ilsRs);
+            AppCand best[2]; int nBest = 0;
+            for (const auto& r : ilsRs) {
+                double leX, leZ, heX, heZ;
+                geo::toWorld(r.leLat, r.leLon, ORIGIN_LAT, ORIGIN_LON, leX, leZ);
+                geo::toWorld(r.heLat, r.heLon, ORIGIN_LAT, ORIGIN_LON, heX, heZ);
+                float elevLe = r.leElevM != 0.f ? r.leElevM : r.apElevM;
+                float elevHe = r.heElevM != 0.f ? r.heElevM : r.apElevM;
+                for (int e = 0; e < 2; ++e) {
+                    AppCand c;
+                    if (e == 0) {       // pousando NA cabeceira LE (rumo LE→HE)
+                        c.thrX = leX; c.thrZ = leZ; c.thrElevM = elevLe;
+                        c.courseDeg = (float)fmod(
+                            atan2(heX - leX, -(heZ - leZ)) * RAD2DEG + 360.0, 360.0);
+                        c.label = r.apIdent + " " + r.leIdent;
+                    } else {            // pousando NA cabeceira HE (rumo HE→LE)
+                        c.thrX = heX; c.thrZ = heZ; c.thrElevM = elevHe;
+                        c.courseDeg = (float)fmod(
+                            atan2(leX - heX, -(leZ - heZ)) * RAD2DEG + 360.0, 360.0);
+                        c.label = r.apIdent + " " + r.heIdent;
+                    }
+                    computeApproachDevs(c, wpos.x, wpos.z, acMslM, hdgDeg);
+                    if (!c.valid) continue;
+                    if (ilsArmed && ilsArmedApp.valid && c.label == ilsArmedApp.label)
+                        continue;   // já exibido como armado
+                    // Mantém os 2 mais alinhados (insertion sort de 2)
+                    if (nBest < 2) {
+                        best[nBest++] = c;
+                        if (nBest == 2 && best[1].courseDiff < best[0].courseDiff)
+                            std::swap(best[0], best[1]);
+                    } else if (c.courseDiff < best[1].courseDiff) {
+                        best[1] = c;
+                        if (best[1].courseDiff < best[0].courseDiff)
+                            std::swap(best[0], best[1]);
+                    }
+                }
+            }
+            for (int i = 0; i < nBest && ilsNDisp < 2; ++i)
+                ilsDisp[ilsNDisp++] = best[i];
+            // PFD: entre os exibidos, o mais alinhado no eixo do yaw
+            for (int i = 0; i < ilsNDisp; ++i)
+                if (ilsPfd < 0 || ilsDisp[i].courseDiff < ilsDisp[ilsPfd].courseDiff)
+                    ilsPfd = i;
+        }
+
         // ── Render ─────────────────────────────────────────────────────────────
         int fw,fh; glfwGetFramebufferSize(win,&fw,&fh);
         glViewport(0,0,fw,fh);
@@ -1069,6 +1182,30 @@ int main(){
             hd.gearPos  = gearAnimPos;
             hd.reverser = surfCmd.reverser;
             hd.throttle = (float)tel.throttle;
+
+            // ILS: cruzeta = mais alinhado no yaw; linhas 3D = até 2 approaches
+            if (ilsPfd >= 0) {
+                const AppCand& a = ilsDisp[ilsPfd];
+                hd.ils.on        = true;
+                hd.ils.locDevDeg = a.locDevDeg;
+                hd.ils.gsDevDeg  = a.gsDevDeg;
+                hd.ils.distNm    = a.distNm;
+                hd.ils.todNm     = (a.alongM - a.todDistM) / 1852.f;
+                snprintf(hd.ils.label, sizeof(hd.ils.label), "%s", a.label.c_str());
+            }
+            hd.nPaths = ilsNDisp;
+            for (int i = 0; i < ilsNDisp; ++i) {
+                const AppCand& a = ilsDisp[i];
+                const float D2Rf = (float)(1.0 / RAD2DEG);
+                hd.paths[i].thrRel = {(float)(a.thrX - wpos.x),
+                                      a.thrElevM - acMslM,
+                                      (float)(a.thrZ - wpos.z)};
+                hd.paths[i].dir  = {sinf(a.courseDeg * D2Rf), 0.f,
+                                    -cosf(a.courseDeg * D2Rf)};
+                hd.paths[i].todM = a.todDistM;
+                snprintf(hd.paths[i].label, sizeof(hd.paths[i].label), "%s",
+                         a.label.c_str());
+            }
             Hud::draw(view, proj, hd, fw, fh);
         }
 
@@ -1373,10 +1510,16 @@ int main(){
                 double track = atan2(tel.vEast, tel.vNorth);
                 driftDeg = (float)(fmod((track - tel.yaw) * RAD2DEG + 540.0, 360.0) - 180.0);
             }
+            bool pfdIls = ilsPfd >= 0;
             PFD::drawPanel(pfdPos, {pfdW, pfdH},
                            (float)(tel.pitch * RAD2DEG), (float)(tel.roll * RAD2DEG),
                            (float)tel.betaDeg, (float)tel.cas, (float)tel.altBaro,
-                           (float)tel.vsFpm, fpaDeg, driftDeg, showFpv);
+                           (float)tel.vsFpm, fpaDeg, driftDeg, showFpv,
+                           pfdIls,
+                           pfdIls ? ilsDisp[ilsPfd].locDevDeg : 0.f,
+                           pfdIls ? ilsDisp[ilsPfd].gsDevDeg  : 0.f,
+                           pfdIls ? ilsDisp[ilsPfd].label.c_str() : "",
+                           pfdIls ? ilsDisp[ilsPfd].distNm : 0.f);
             ImGui::End();
             ImGui::PopStyleVar();
         }
@@ -1535,7 +1678,7 @@ int main(){
                 }
                 ImVec2 avail = ImGui::GetContentRegionAvail();
                 MiniMap::RwyPick rwyPick;
-                minimap.drawPicker({avail.x, avail.y - 26.f},
+                minimap.drawPicker({avail.x, avail.y - 48.f},
                                    repoParams.latDeg, repoParams.lonDeg,
                                    fdm.getLatDeg(), fdm.getLonDeg(),
                                    (float)fdm.getHdgDeg(), &mapPois,
@@ -1547,11 +1690,41 @@ int main(){
                     repoParams.speedKcas  = 0.f;
                     repoParams.pitchDeg   = 0.f;
                     repoParams.rollDeg    = 0.f;
+                    lastRwyPick           = rwyPick;   // persiste p/ armar ILS
                 }
                 if (ImGui::SmallButton("Centrar no aviao"))
                     minimap.centerPickerOn(fdm.getLatDeg(), fdm.getLonDeg());
                 ImGui::SameLine();
-                ImGui::TextDisabled("clique = destino | cabeceira = decolagem | scroll = zoom");
+                ImGui::TextDisabled("clique = destino | cabeceira = decolagem/ILS | scroll = zoom");
+
+                // ── ILS: armar approach na última cabeceira clicada ───────────
+                // A proa de decolagem da cabeceira clicada É a proa de pouso
+                // de quem aproxima por ela — serve direto de course do ILS.
+                if (lastRwyPick.valid) {
+                    char bl[80];
+                    snprintf(bl, sizeof(bl), "ARMAR ILS %s (proa %03.0f)",
+                             lastRwyPick.label.c_str(), lastRwyPick.hdgDeg);
+                    ImGui::PushStyleColor(ImGuiCol_Button, {.55f, .15f, .65f, 1.f});
+                    bool arm = ImGui::SmallButton(bl);
+                    ImGui::PopStyleColor();
+                    if (arm) {
+                        ilsArmed = true;
+                        ilsArmedApp = AppCand{};
+                        ilsArmedApp.label = lastRwyPick.label;
+                        geo::toWorld(lastRwyPick.lat, lastRwyPick.lon,
+                                     ORIGIN_LAT, ORIGIN_LON,
+                                     ilsArmedApp.thrX, ilsArmedApp.thrZ);
+                        ilsArmedApp.thrElevM  = lastRwyPick.elevM;
+                        ilsArmedApp.courseDeg = (float)lastRwyPick.hdgDeg;
+                    }
+                    if (ilsArmed) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("DESARMAR ILS")) ilsArmed = false;
+                        ImGui::SameLine();
+                        ImGui::TextColored({.9f,.5f,1.f,1.f}, "ILS %s armado",
+                                           ilsArmedApp.label.c_str());
+                    }
+                }
             }
             ImGui::EndChild();
             ImGui::End();

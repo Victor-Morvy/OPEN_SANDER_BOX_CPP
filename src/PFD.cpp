@@ -118,7 +118,9 @@ static void drawVsiStrip(ImDrawList* dl, ImVec2 pos, ImVec2 size, float vsFpm) {
 }
 
 void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float betaDeg,
-                  float fpaDeg, float driftDeg, bool showFpv) {
+                  float fpaDeg, float driftDeg, bool showFpv,
+                  bool ilsOn, float locDevDeg, float gsDevDeg,
+                  const char* ilsLabel, float ilsDistNm) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 center(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
     ImVec2 pMax(pos.x + size.x, pos.y + size.y);
@@ -255,6 +257,44 @@ void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float 
         dl->AddQuadFilled(tA, tB, tC, tD, IM_COL32(255,255,255,255));
     }
 
+    // ── ILS: escalas de LOC (embaixo) e GS (direita), losangos magenta ───────
+    // Presos ao case (não giram com a bola), como num PFD real. Escala:
+    // 2 pontos por lado — LOC 1.25°/ponto (full 2.5°), GS 0.35°/ponto (0.7°).
+    if (ilsOn) {
+        const ImU32 ilsCol = IM_COL32(235, 110, 255, 255);
+        const ImU32 dotCol = IM_COL32(230, 230, 230, 200);
+
+        // LOC — trilho horizontal na base do ADI
+        {
+            float ty   = pMax.y - 14.f;
+            float step = size.x * 0.09f;
+            dl->AddLine({center.x, ty - 5.f}, {center.x, ty + 5.f}, dotCol, 2.f);
+            for (int i : {-2, -1, 1, 2})
+                dl->AddCircle({center.x + (float)i * step, ty}, 3.f, dotCol, 10, 1.5f);
+            float dx = std::clamp(locDevDeg / 2.5f, -1.f, 1.f) * 2.f * step;
+            ImVec2 p{center.x + dx, ty};
+            dl->AddQuadFilled({p.x, p.y - 6.f}, {p.x + 6.f, p.y},
+                              {p.x, p.y + 6.f}, {p.x - 6.f, p.y}, ilsCol);
+        }
+        // GS — trilho vertical na borda direita do ADI
+        {
+            float tx   = pMax.x - 14.f;
+            float step = size.y * 0.11f;
+            dl->AddLine({tx - 5.f, center.y}, {tx + 5.f, center.y}, dotCol, 2.f);
+            for (int i : {-2, -1, 1, 2})
+                dl->AddCircle({tx, center.y + (float)i * step}, 3.f, dotCol, 10, 1.5f);
+            // + = voar pra cima = losango ACIMA do centro
+            float dy = -std::clamp(gsDevDeg / 0.7f, -1.f, 1.f) * 2.f * step;
+            ImVec2 p{tx, center.y + dy};
+            dl->AddQuadFilled({p.x, p.y - 6.f}, {p.x + 6.f, p.y},
+                              {p.x, p.y + 6.f}, {p.x - 6.f, p.y}, ilsCol);
+        }
+        // Identificação + distância (canto superior esquerdo do ADI)
+        char il[40];
+        snprintf(il, sizeof(il), "ILS %s  %.1fNM", ilsLabel, ilsDistNm);
+        dl->AddText({pos.x + 6.f, pos.y + 4.f}, ilsCol, il);
+    }
+
     dl->PopClipRect();
 
     // ── Símbolo fixo da aeronave (não gira nem desloca — referência do nariz) ──
@@ -271,7 +311,9 @@ void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float 
 void drawPanel(ImVec2 pos, ImVec2 size,
                float pitchDeg, float rollDeg, float betaDeg,
                float speedKt, float altFt, float vsFpm,
-               float fpaDeg, float driftDeg, bool showFpv) {
+               float fpaDeg, float driftDeg, bool showFpv,
+               bool ilsOn, float locDevDeg, float gsDevDeg,
+               const char* ilsLabel, float ilsDistNm) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const float spdW = size.x * 0.155f;
@@ -286,7 +328,8 @@ void drawPanel(ImVec2 pos, ImVec2 size,
 
     drawSpeedTape(dl, spdPos, {spdW, size.y}, speedKt);
     drawAttitude(adiPos, {adiW, size.y}, pitchDeg, rollDeg, betaDeg,
-                 fpaDeg, driftDeg, showFpv);
+                 fpaDeg, driftDeg, showFpv,
+                 ilsOn, locDevDeg, gsDevDeg, ilsLabel, ilsDistNm);
     drawAltTape(dl, altPos, {altW, size.y}, altFt);
     drawVsiStrip(dl, vsPos, {vsW, size.y}, vsFpm);
 }

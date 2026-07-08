@@ -21,6 +21,30 @@ struct Data {
     float      gearPos  = 1.f;    // 0=recolhido, 1=baixado (posição animada)
     bool       reverser = false;  // reversor DEPLOYADO (estado real pós-FBW)
     float      throttle = 0.f;    // manete comandada 0..1 (cmd efetivo FADEC)
+
+    // ── ILS sintético ──
+    // Cruzeta de desvio (approach mais alinhado no yaw / armado):
+    //   locDevDeg + = voar pra direita   gsDevDeg + = voar pra cima
+    //   todNm: distância até o ponto de início de descida 3° na altura atual
+    //   (+ = ainda antes do ponto; ≤0 = já deveria estar descendo)
+    struct Ils {
+        bool  on = false;
+        float locDevDeg = 0.f, gsDevDeg = 0.f;
+        float distNm = 0.f, todNm = 0.f;
+        char  label[24] = {0};
+    };
+    Ils ils;
+
+    // Linhas de aproximação 3D (conformais): rampa de 3° subindo da cabeceira
+    // contra a direção de pouso. Até 2 (ex.: pistas paralelas próximas).
+    struct AppPath {
+        glm::vec3 thrRel{0.f};  // cabeceira rel. ao avião (frame render, Y=ΔMSL)
+        glm::vec3 dir{0.f};     // direção de POUSO (unit, horizontal)
+        float     todM = 0.f;   // dist. da cabeceira do ponto de descida 3°
+        char      label[24] = {0};
+    };
+    int     nPaths = 0;
+    AppPath paths[2];
 };
 
 // Desenha o HUD completo:

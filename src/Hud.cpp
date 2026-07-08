@@ -2,6 +2,7 @@
 #include <imgui.h>
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 
 namespace Hud {
 
@@ -44,6 +45,18 @@ static bool projDir(const glm::vec3& dir, const glm::mat4& vp,
                     int fw, int fh, ImVec2& outPx) {
     glm::vec4 clip = vp * glm::vec4(dir, 0.f);
     if (clip.w <= 1e-6f) return false;          // atrás da câmera
+    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    outPx.x = (ndc.x * 0.5f + 0.5f) * (float)fw;
+    outPx.y = (1.f - (ndc.y * 0.5f + 0.5f)) * (float)fh;
+    return true;
+}
+
+// Projeta um PONTO relativo ao avião (w=1) — usado pelas linhas de approach,
+// que têm posição real no mundo (não são direções no infinito).
+static bool projPoint(const glm::vec3& rel, const glm::mat4& vp,
+                      int fw, int fh, ImVec2& outPx) {
+    glm::vec4 clip = vp * glm::vec4(rel, 1.f);
+    if (clip.w <= 1.f) return false;            // atrás/em cima da câmera
     glm::vec3 ndc = glm::vec3(clip) / clip.w;
     outPx.x = (ndc.x * 0.5f + 0.5f) * (float)fw;
     outPx.y = (1.f - (ndc.y * 0.5f + 0.5f)) * (float)fh;
@@ -174,6 +187,81 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
             dl->AddLine({f.x + r,        f.y}, {f.x + r + wing, f.y}, HUD_COL, 2.5f);
             dl->AddLine({f.x, f.y - r}, {f.x, f.y - r - tail},        HUD_COL, 2.5f);
         }
+    }
+
+    // ── ILS: linhas de aproximação 3D (rampa de 3° a partir da cabeceira) ───
+    // Conformais: pontos no mundo relativos ao avião, projetados com w=1 e
+    // curvatura da Terra por amostra (mesma correção do terreno). O marcador
+    // TOD fica no ponto da rampa que cruza a ALTURA ATUAL do avião — é ali
+    // que se inicia a descida de 3°.
+    for (int pi = 0; pi < d.nPaths && pi < 2; ++pi) {
+        const auto& ap = d.paths[pi];
+        constexpr float TAN3   = 0.052408f;   // tan(3°)
+        constexpr float STEP_M = 926.f;       // meia milha náutica
+        float maxS = std::min(std::max(ap.todM * 1.3f, 9260.f), 46000.f);
+
+        ImVec2 prev; bool prevOk = false;
+        for (float s = 0.f; s <= maxS; s += STEP_M) {
+            glm::vec3 p = ap.thrRel - ap.dir * s + glm::vec3(0.f, s * TAN3, 0.f);
+            float dh = sqrtf(p.x * p.x + p.z * p.z);
+            p.y -= dh * dh / (2.f * 6371000.f);       // curvatura da Terra
+            ImVec2 px;
+            bool ok = projPoint(p, vp, fw, fh, px);
+            if (ok && prevOk) dl->AddLine(prev, px, HUD_COL_DIM, 2.f);
+            prev = px; prevOk = ok;
+        }
+        // Cabeceira: quadradinho
+        ImVec2 tp;
+        if (projPoint(ap.thrRel, vp, fw, fh, tp))
+            dl->AddRect({tp.x - 5.f, tp.y - 5.f}, {tp.x + 5.f, tp.y + 5.f},
+                        HUD_COL, 0.f, 0, 2.f);
+        // TOD: círculo + rótulo no ponto de início de descida
+        if (ap.todM > 500.f && ap.todM < maxS) {
+            glm::vec3 p = ap.thrRel - ap.dir * ap.todM
+                        + glm::vec3(0.f, ap.todM * TAN3, 0.f);
+            float dh = sqrtf(p.x * p.x + p.z * p.z);
+            p.y -= dh * dh / (2.f * 6371000.f);
+            ImVec2 px;
+            if (projPoint(p, vp, fw, fh, px)) {
+                dl->AddCircle(px, 8.f, HUD_COL, 20, 2.5f);
+                hudText(dl, {px.x + 12.f, px.y - 10.f}, HUD_COL, "TOD");
+            }
+        }
+        // Identificação perto da cabeceira
+        if (projPoint(ap.thrRel, vp, fw, fh, tp))
+            hudText(dl, {tp.x + 8.f, tp.y + 6.f}, HUD_COL_DIM, ap.label);
+    }
+
+    // ── ILS: cruzeta de desvio (LOC vertical, GS horizontal) ─────────────────
+    // Agulhas fly-to no centro do combiner: centralizar as duas = na rampa e
+    // no eixo. Escala: LOC ±2.5° (40 px/°), GS ±0.7° (143 px/°).
+    if (d.ils.on) {
+        float cx = (clipMin.x + clipMax.x) * 0.5f;
+        float cy = (clipMin.y + clipMax.y) * 0.5f;
+        const float SPAN = 60.f;
+
+        // Pontos da escala (2 por lado, a cada 50 px) nos dois eixos
+        for (int i : {-2, -1, 1, 2}) {
+            dl->AddCircle({cx + (float)i * 50.f, cy}, 2.5f, HUD_COL_DIM, 8, 1.5f);
+            dl->AddCircle({cx, cy + (float)i * 50.f}, 2.5f, HUD_COL_DIM, 8, 1.5f);
+        }
+        // Agulha do LOC (vertical, desloca em X)
+        float lx = cx + std::clamp(d.ils.locDevDeg, -2.5f, 2.5f) * 40.f;
+        dl->AddLine({lx, cy - SPAN}, {lx, cy + SPAN}, HUD_COL, 2.5f);
+        // Agulha do GS (horizontal, desloca em Y; + = voar pra cima = agulha acima)
+        float gy = cy - std::clamp(d.ils.gsDevDeg, -0.7f, 0.7f) * 143.f;
+        dl->AddLine({cx - SPAN, gy}, {cx + SPAN, gy}, HUD_COL, 2.5f);
+
+        // Identificação + distância + TOD (base do combiner, centralizado)
+        char il[64];
+        if (d.ils.todNm > 0.1f)
+            snprintf(il, sizeof(il), "ILS %s  %.1fNM  TOD %.1fNM",
+                     d.ils.label, d.ils.distNm, d.ils.todNm);
+        else
+            snprintf(il, sizeof(il), "ILS %s  %.1fNM  DESCIDA",
+                     d.ils.label, d.ils.distNm);
+        ImVec2 ts = hudTextSize(il);
+        hudText(dl, {cx - ts.x * 0.5f, clipMax.y - ts.y - 4.f}, HUD_COL, il);
     }
 
     // ── Caixa de heading (topo do combiner, centralizada) ───────────────────

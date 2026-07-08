@@ -8,23 +8,45 @@ namespace Hud {
 
 static constexpr float D2R = 3.14159265358979323846f / 180.f;
 
-// Verde clássico de HUD/combiner
+// Verde clássico de HUD/combiner + outline verde escuro (halo de contraste —
+// sem ele os símbolos somem contra céu claro/nuvem)
 static const ImU32 HUD_COL     = IM_COL32(30, 255, 100, 220);
 static const ImU32 HUD_COL_DIM = IM_COL32(30, 255, 100, 150);
+static const ImU32 HUD_OUT     = IM_COL32(0, 62, 22, 210);
 
+// Primitivas com outline: o traço escuro mais grosso vai por baixo do claro
+// (AddLine/AddCircle/AddRect centram a espessura → sobra ~1.5px de borda
+// escura de cada lado).
+static void oLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float th) {
+    dl->AddLine(a, b, HUD_OUT, th + 3.f);
+    dl->AddLine(a, b, col, th);
+}
+static void oCircle(ImDrawList* dl, ImVec2 c, float r, ImU32 col, int seg, float th) {
+    dl->AddCircle(c, r, HUD_OUT, seg, th + 3.f);
+    dl->AddCircle(c, r, col, seg, th);
+}
+static void oRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float round, float th) {
+    dl->AddRect(a, b, HUD_OUT, round, 0, th + 3.f);
+    dl->AddRect(a, b, col, round, 0, th);
+}
 // Fonte do HUD: default do ImGui ampliada (AddText com tamanho explícito) —
 // os 13px padrão ficavam pequenos demais lendo o combiner em voo.
+// Todo texto sai com halo escuro em 8 direções (1px).
 static constexpr float FS = 20.f;
 static ImVec2 hudTextSize(const char* s) {
     return ImGui::GetFont()->CalcTextSizeA(FS, FLT_MAX, 0.f, s);
 }
 static void hudText(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* s) {
-    dl->AddText(ImGui::GetFont(), FS, pos, col, s);
+    ImFont* f = ImGui::GetFont();
+    static const ImVec2 OFF[8] = {{-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1}};
+    for (const auto& o : OFF)
+        dl->AddText(f, FS, {pos.x + o.x, pos.y + o.y}, HUD_OUT, s);
+    dl->AddText(f, FS, pos, col, s);
 }
 
 // Caixa digital (CAS/ALT/HDG/VS): retângulo com valor alinhado à direita.
 static void hudBox(ImDrawList* dl, ImVec2 a, ImVec2 b, const char* val) {
-    dl->AddRect(a, b, HUD_COL, 2.f, 0, 2.f);
+    oRect(dl, a, b, HUD_COL, 2.f, 2.f);
     ImVec2 ts = hudTextSize(val);
     hudText(dl, {b.x - ts.x - 6.f, (a.y + b.y) * 0.5f - ts.y * 0.5f}, HUD_COL, val);
 }
@@ -86,7 +108,7 @@ static void rungSegment(ImDrawList* dl, const glm::mat4& vp, int fw, int fh,
     ImVec2 a, b;
     if (!projDir(rungPoint(yaw, pitchDeg, az0), vp, fw, fh, a)) return;
     if (!projDir(rungPoint(yaw, pitchDeg, az1), vp, fw, fh, b)) return;
-    dl->AddLine(a, b, col, thick);
+    oLine(dl, a, b, col, thick);
 }
 
 // Tick vertical na ponta do degrau, apontando para o horizonte (para baixo
@@ -98,7 +120,7 @@ static void rungTick(ImDrawList* dl, const glm::mat4& vp, int fw, int fh,
     ImVec2 a, b;
     if (!projDir(rungPoint(yaw, pitchDeg, azDeg), vp, fw, fh, a)) return;
     if (!projDir(rungPoint(yaw, pitchDeg + toHorizon, azDeg), vp, fw, fh, b)) return;
-    dl->AddLine(a, b, col, 2.f);
+    oLine(dl, a, b, col, 2.f);
 }
 
 void draw(const glm::mat4& view, const glm::mat4& proj,
@@ -164,12 +186,12 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
     if (projDir(dirWorld(yaw, (float)d.pitchRad), vp, fw, fh, c)) {
         const float w = 26.f, v = 9.f;     // meia-envergadura e profundidade do V
         const ImU32 wl = HUD_COL;
-        dl->AddLine({c.x - w,       c.y},     {c.x - v * 1.4f, c.y},     wl, 3.f);
-        dl->AddLine({c.x - v * 1.4f, c.y},    {c.x - v * 0.7f, c.y + v}, wl, 3.f);
-        dl->AddLine({c.x - v * 0.7f, c.y + v}, {c.x,           c.y},     wl, 3.f);
-        dl->AddLine({c.x,           c.y},     {c.x + v * 0.7f, c.y + v}, wl, 3.f);
-        dl->AddLine({c.x + v * 0.7f, c.y + v}, {c.x + v * 1.4f, c.y},    wl, 3.f);
-        dl->AddLine({c.x + v * 1.4f, c.y},    {c.x + w,        c.y},     wl, 3.f);
+        oLine(dl, {c.x - w,       c.y},     {c.x - v * 1.4f, c.y},     wl, 3.f);
+        oLine(dl, {c.x - v * 1.4f, c.y},    {c.x - v * 0.7f, c.y + v}, wl, 3.f);
+        oLine(dl, {c.x - v * 0.7f, c.y + v}, {c.x,           c.y},     wl, 3.f);
+        oLine(dl, {c.x,           c.y},     {c.x + v * 0.7f, c.y + v}, wl, 3.f);
+        oLine(dl, {c.x + v * 0.7f, c.y + v}, {c.x + v * 1.4f, c.y},    wl, 3.f);
+        oLine(dl, {c.x + v * 1.4f, c.y},    {c.x + w,        c.y},     wl, 3.f);
     }
 
     // ── Flight path vector ───────────────────────────────────────────────────
@@ -182,10 +204,10 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
         ImVec2 f;
         if (projDir(glm::normalize(d.velWorld), vp, fw, fh, f)) {
             const float r = 8.f, wing = 14.f, tail = 8.f;
-            dl->AddCircle(f, r, HUD_COL, 24, 2.5f);
-            dl->AddLine({f.x - r,        f.y}, {f.x - r - wing, f.y}, HUD_COL, 2.5f);
-            dl->AddLine({f.x + r,        f.y}, {f.x + r + wing, f.y}, HUD_COL, 2.5f);
-            dl->AddLine({f.x, f.y - r}, {f.x, f.y - r - tail},        HUD_COL, 2.5f);
+            oCircle(dl, f, r, HUD_COL, 24, 2.5f);
+            oLine(dl, {f.x - r,        f.y}, {f.x - r - wing, f.y}, HUD_COL, 2.5f);
+            oLine(dl, {f.x + r,        f.y}, {f.x + r + wing, f.y}, HUD_COL, 2.5f);
+            oLine(dl, {f.x, f.y - r}, {f.x, f.y - r - tail},        HUD_COL, 2.5f);
         }
     }
 
@@ -207,14 +229,14 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
             p.y -= dh * dh / (2.f * 6371000.f);       // curvatura da Terra
             ImVec2 px;
             bool ok = projPoint(p, vp, fw, fh, px);
-            if (ok && prevOk) dl->AddLine(prev, px, HUD_COL_DIM, 2.f);
+            if (ok && prevOk) oLine(dl, prev, px, HUD_COL_DIM, 2.f);
             prev = px; prevOk = ok;
         }
         // Cabeceira: quadradinho
         ImVec2 tp;
         if (projPoint(ap.thrRel, vp, fw, fh, tp))
-            dl->AddRect({tp.x - 5.f, tp.y - 5.f}, {tp.x + 5.f, tp.y + 5.f},
-                        HUD_COL, 0.f, 0, 2.f);
+            oRect(dl, {tp.x - 5.f, tp.y - 5.f}, {tp.x + 5.f, tp.y + 5.f},
+                  HUD_COL, 0.f, 2.f);
         // TOD: círculo + rótulo no ponto de início de descida
         if (ap.todM > 500.f && ap.todM < maxS) {
             glm::vec3 p = ap.thrRel - ap.dir * ap.todM
@@ -223,7 +245,7 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
             p.y -= dh * dh / (2.f * 6371000.f);
             ImVec2 px;
             if (projPoint(p, vp, fw, fh, px)) {
-                dl->AddCircle(px, 8.f, HUD_COL, 20, 2.5f);
+                oCircle(dl, px, 8.f, HUD_COL, 20, 2.5f);
                 hudText(dl, {px.x + 12.f, px.y - 10.f}, HUD_COL, "TOD");
             }
         }
@@ -242,15 +264,15 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
 
         // Pontos da escala (2 por lado, a cada 50 px) nos dois eixos
         for (int i : {-2, -1, 1, 2}) {
-            dl->AddCircle({cx + (float)i * 50.f, cy}, 2.5f, HUD_COL_DIM, 8, 1.5f);
-            dl->AddCircle({cx, cy + (float)i * 50.f}, 2.5f, HUD_COL_DIM, 8, 1.5f);
+            oCircle(dl, {cx + (float)i * 50.f, cy}, 2.5f, HUD_COL_DIM, 8, 1.5f);
+            oCircle(dl, {cx, cy + (float)i * 50.f}, 2.5f, HUD_COL_DIM, 8, 1.5f);
         }
         // Agulha do LOC (vertical, desloca em X)
         float lx = cx + std::clamp(d.ils.locDevDeg, -2.5f, 2.5f) * 40.f;
-        dl->AddLine({lx, cy - SPAN}, {lx, cy + SPAN}, HUD_COL, 2.5f);
+        oLine(dl, {lx, cy - SPAN}, {lx, cy + SPAN}, HUD_COL, 2.5f);
         // Agulha do GS (horizontal, desloca em Y; + = voar pra cima = agulha acima)
         float gy = cy - std::clamp(d.ils.gsDevDeg, -0.7f, 0.7f) * 143.f;
-        dl->AddLine({cx - SPAN, gy}, {cx + SPAN, gy}, HUD_COL, 2.5f);
+        oLine(dl, {cx - SPAN, gy}, {cx + SPAN, gy}, HUD_COL, 2.5f);
 
         // Identificação + distância + TOD (base do combiner, centralizado)
         char il[64];

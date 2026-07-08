@@ -33,26 +33,41 @@ static bool projDir(const glm::vec3& dir, const glm::mat4& vp,
     return true;
 }
 
-// Segmento de degrau entre dois offsets de azimute (graus) num pitch fixo.
-// Projeta os dois extremos separadamente — a leve curvatura da linha de
-// pitch constante é absorvida por segmento, sem precisar de polilinha.
+// Direção de um ponto do degrau: centro no eixo da escada (heading yaw,
+// pitch p) e extensão LATERAL por GRANDE CÍRCULO — gira o centro em torno do
+// eixo vertical da escada, com largura angular constante:
+//   e(az) = d(p)·cos(az) + right·sin(az),  right = (cos(yaw), 0, sin(yaw))
+// NÃO usar pitch constante com offset de azimute (paralelo de latitude): esses
+// círculos encolhem com cos(p) e convergem pro zênite — a escada afunilava
+// rumo a um "ponto de fuga" no pitch 90° (defeito notado pelo Victor olhando
+// degraus altos de baixo/de cima). Com grande círculo todo degrau tem a mesma
+// largura angular e fica perpendicular ao eixo da escada, como num HUD real.
+static glm::vec3 rungPoint(float yaw, float pitchDeg, float azDeg) {
+    glm::vec3 d = dirWorld(yaw, pitchDeg * D2R);
+    glm::vec3 right{cosf(yaw), 0.f, sinf(yaw)};
+    float a = azDeg * D2R;
+    return d * cosf(a) + right * sinf(a);
+}
+
+// Segmento de degrau entre dois offsets laterais (graus de arco).
 static void rungSegment(ImDrawList* dl, const glm::mat4& vp, int fw, int fh,
                         float yaw, float pitchDeg, float az0, float az1,
                         ImU32 col, float thick) {
     ImVec2 a, b;
-    if (!projDir(dirWorld(yaw + az0 * D2R, pitchDeg * D2R), vp, fw, fh, a)) return;
-    if (!projDir(dirWorld(yaw + az1 * D2R, pitchDeg * D2R), vp, fw, fh, b)) return;
+    if (!projDir(rungPoint(yaw, pitchDeg, az0), vp, fw, fh, a)) return;
+    if (!projDir(rungPoint(yaw, pitchDeg, az1), vp, fw, fh, b)) return;
     dl->AddLine(a, b, col, thick);
 }
 
 // Tick vertical na ponta do degrau, apontando para o horizonte (para baixo
 // nos degraus positivos, para cima nos negativos) — convenção clássica.
+// O tick segue o eixo da escada: mesmo offset lateral, pitch deslocado.
 static void rungTick(ImDrawList* dl, const glm::mat4& vp, int fw, int fh,
                      float yaw, float pitchDeg, float azDeg, ImU32 col) {
     float toHorizon = (pitchDeg > 0.f) ? -1.5f : 1.5f;
     ImVec2 a, b;
-    if (!projDir(dirWorld(yaw + azDeg * D2R, pitchDeg * D2R), vp, fw, fh, a)) return;
-    if (!projDir(dirWorld(yaw + azDeg * D2R, (pitchDeg + toHorizon) * D2R), vp, fw, fh, b)) return;
+    if (!projDir(rungPoint(yaw, pitchDeg, azDeg), vp, fw, fh, a)) return;
+    if (!projDir(rungPoint(yaw, pitchDeg + toHorizon, azDeg), vp, fw, fh, b)) return;
     dl->AddLine(a, b, col, 2.f);
 }
 
@@ -104,11 +119,9 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
             snprintf(lbl, sizeof(lbl), "%d", p > 0 ? p : -p);
             ImVec2 ts = ImGui::CalcTextSize(lbl);
             ImVec2 e;
-            if (projDir(dirWorld(yaw - (halfW + 1.5f) * D2R, (float)p * D2R),
-                        vp, fw, fh, e))
+            if (projDir(rungPoint(yaw, (float)p, -(halfW + 1.5f)), vp, fw, fh, e))
                 dl->AddText({e.x - ts.x, e.y - ts.y * 0.5f}, col, lbl);
-            if (projDir(dirWorld(yaw + (halfW + 1.5f) * D2R, (float)p * D2R),
-                        vp, fw, fh, e))
+            if (projDir(rungPoint(yaw, (float)p,  halfW + 1.5f), vp, fw, fh, e))
                 dl->AddText({e.x, e.y - ts.y * 0.5f}, col, lbl);
         }
     }

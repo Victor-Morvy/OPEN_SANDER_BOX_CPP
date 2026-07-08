@@ -117,7 +117,8 @@ static void drawVsiStrip(ImDrawList* dl, ImVec2 pos, ImVec2 size, float vsFpm) {
                           IM_COL32(0, 230, 90, 255));
 }
 
-void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float betaDeg) {
+void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float betaDeg,
+                  float fpaDeg, float driftDeg, bool showFpv) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 center(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
     ImVec2 pMax(pos.x + size.x, pos.y + size.y);
@@ -217,6 +218,27 @@ void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float 
     ImVec2 ptrBaseR= ballPoint(center,  7.f, -bankR + 14.f, cosR, ptrSinR);
     dl->AddTriangleFilled(ptrTip, ptrBaseL, ptrBaseR, IM_COL32(255, 210, 0, 255));
 
+    // ── FPV (flight path vector): círculo + asinhas + cauda, preso à bola ────
+    // Vertical = γ na mesma escala da escada de pitch; lateral = deriva
+    // (track − heading). Asas paralelas ao horizonte (giram com a bola).
+    if (showFpv) {
+        const ImU32 fpvCol = IM_COL32(0, 230, 90, 255);
+        float fx = driftDeg * pxPerDeg;
+        float fy = pitchOffY - fpaDeg * pxPerDeg;
+        const float r = 6.f, wing = 10.f, tail = 6.f;
+        ImVec2 q = ballPoint(center, fx, fy, cosR, sinR);
+        dl->AddCircle(q, r, fpvCol, 20, 2.f);
+        ImVec2 wl0 = ballPoint(center, fx - r,        fy, cosR, sinR);
+        ImVec2 wl1 = ballPoint(center, fx - r - wing, fy, cosR, sinR);
+        ImVec2 wr0 = ballPoint(center, fx + r,        fy, cosR, sinR);
+        ImVec2 wr1 = ballPoint(center, fx + r + wing, fy, cosR, sinR);
+        ImVec2 t0  = ballPoint(center, fx, fy - r,        cosR, sinR);
+        ImVec2 t1  = ballPoint(center, fx, fy - r - tail, cosR, sinR);
+        dl->AddLine(wl0, wl1, fpvCol, 2.f);
+        dl->AddLine(wr0, wr1, fpvCol, 2.f);
+        dl->AddLine(t0,  t1,  fpvCol, 2.f);
+    }
+
     // ── Slip/skid: trapézio numa trilha fixa logo abaixo do índice de bank ───
     // Não gira com o roll (fica preso ao case, como num ADI real) — desliza
     // lateralmente com beta. Mesma convenção de sinal do painel SUPERFICIES.
@@ -248,7 +270,8 @@ void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float 
 
 void drawPanel(ImVec2 pos, ImVec2 size,
                float pitchDeg, float rollDeg, float betaDeg,
-               float speedKt, float altFt, float vsFpm) {
+               float speedKt, float altFt, float vsFpm,
+               float fpaDeg, float driftDeg, bool showFpv) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const float spdW = size.x * 0.155f;
@@ -262,7 +285,8 @@ void drawPanel(ImVec2 pos, ImVec2 size,
     ImVec2 vsPos {altPos.x + altW + 2.f, pos.y};
 
     drawSpeedTape(dl, spdPos, {spdW, size.y}, speedKt);
-    drawAttitude(adiPos, {adiW, size.y}, pitchDeg, rollDeg, betaDeg);
+    drawAttitude(adiPos, {adiW, size.y}, pitchDeg, rollDeg, betaDeg,
+                 fpaDeg, driftDeg, showFpv);
     drawAltTape(dl, altPos, {altW, size.y}, altFt);
     drawVsiStrip(dl, vsPos, {vsW, size.y}, vsFpm);
 }

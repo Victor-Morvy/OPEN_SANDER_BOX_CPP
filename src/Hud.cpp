@@ -72,11 +72,10 @@ static void rungTick(ImDrawList* dl, const glm::mat4& vp, int fw, int fh,
 }
 
 void draw(const glm::mat4& view, const glm::mat4& proj,
-          double yawRad, double pitchRad, const glm::vec3& velWorld,
-          int fw, int fh) {
+          const Data& d, int fw, int fh) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const glm::mat4 vp = proj * view;
-    const float yaw = (float)yawRad;
+    const float yaw = (float)d.yawRad;
 
     // Área útil do combiner: caixa central — evita a escada invadir os
     // painéis ImGui das bordas e imita o campo limitado de um HUD real.
@@ -132,7 +131,7 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
     // centro da tela; olhando reto, fica no centro. Formato clássico ─\_/─
     // (W achatado), tamanho fixo em pixels.
     ImVec2 c;
-    if (projDir(dirWorld(yaw, (float)pitchRad), vp, fw, fh, c)) {
+    if (projDir(dirWorld(yaw, (float)d.pitchRad), vp, fw, fh, c)) {
         const float w = 26.f, v = 9.f;     // meia-envergadura e profundidade do V
         const ImU32 wl = HUD_COL;
         dl->AddLine({c.x - w,       c.y},     {c.x - v * 1.4f, c.y},     wl, 3.f);
@@ -149,15 +148,97 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
     // no degrau do ângulo de trajetória; a distância vertical até a waterline
     // é o alpha. Símbolo clássico: círculo + asinhas + cauda, px fixos.
     // ~8 fps ≈ 5 kt: parado/taxiando devagar a direção não significa nada.
-    if (glm::dot(velWorld, velWorld) > 8.f * 8.f) {
+    if (glm::dot(d.velWorld, d.velWorld) > 8.f * 8.f) {
         ImVec2 f;
-        if (projDir(glm::normalize(velWorld), vp, fw, fh, f)) {
+        if (projDir(glm::normalize(d.velWorld), vp, fw, fh, f)) {
             const float r = 8.f, wing = 14.f, tail = 8.f;
             dl->AddCircle(f, r, HUD_COL, 24, 2.5f);
             dl->AddLine({f.x - r,        f.y}, {f.x - r - wing, f.y}, HUD_COL, 2.5f);
             dl->AddLine({f.x + r,        f.y}, {f.x + r + wing, f.y}, HUD_COL, 2.5f);
             dl->AddLine({f.x, f.y - r}, {f.x, f.y - r - tail},        HUD_COL, 2.5f);
         }
+    }
+
+    // ── Fita de heading (topo do combiner, fixa na tela) ────────────────────
+    // Janela de ±25°, tick a cada 5°, rótulo %03d a cada 10°, caret central
+    // apontando para baixo na proa atual.
+    {
+        float hdgDeg = fmodf((float)(d.yawRad / D2R) + 360.f, 360.f);
+        float cx = (clipMin.x + clipMax.x) * 0.5f;
+        float y0 = clipMin.y + 14.f;
+        float pxPerDeg = (clipMax.x - clipMin.x) / 50.f;
+
+        dl->AddLine({clipMin.x, y0}, {clipMax.x, y0}, HUD_COL_DIM, 1.5f);
+        int h0 = (int)floorf((hdgDeg - 25.f) / 5.f) * 5;
+        for (int h = h0; h <= h0 + 55; h += 5) {
+            float diff = fmodf((float)h - hdgDeg + 540.f, 360.f) - 180.f;
+            if (fabsf(diff) > 25.f) continue;
+            float x = cx + diff * pxPerDeg;
+            bool major = (h % 10 == 0);
+            dl->AddLine({x, y0}, {x, y0 + (major ? 11.f : 6.f)}, HUD_COL, major ? 2.f : 1.5f);
+            if (major) {
+                snprintf(lbl, sizeof(lbl), "%03d", ((h % 360) + 360) % 360);
+                ImVec2 ts = ImGui::CalcTextSize(lbl);
+                dl->AddText({x - ts.x * 0.5f, y0 + 13.f}, HUD_COL, lbl);
+            }
+        }
+        // Caret da proa atual (aponta pra baixo, tocando a linha da fita)
+        dl->AddTriangleFilled({cx, y0}, {cx - 6.f, y0 - 9.f}, {cx + 6.f, y0 - 9.f},
+                              HUD_COL);
+    }
+
+    // ── Caixas de velocidade (esquerda) e altitude (direita) ────────────────
+    {
+        float cy = (clipMin.y + clipMax.y) * 0.5f;
+        char buf[16];
+
+        // CAS à esquerda
+        snprintf(buf, sizeof(buf), "%d", (int)lroundf(d.casKt));
+        {
+            ImVec2 a{clipMin.x + 4.f, cy - 14.f}, b{clipMin.x + 4.f + 64.f, cy + 14.f};
+            dl->AddRect(a, b, HUD_COL, 2.f, 0, 2.f);
+            ImVec2 ts = ImGui::CalcTextSize(buf);
+            dl->AddText({b.x - ts.x - 6.f, cy - ts.y * 0.5f}, HUD_COL, buf);
+            dl->AddText({a.x, a.y - 18.f}, HUD_COL_DIM, "CAS KT");
+        }
+
+        // Altitude à direita
+        snprintf(buf, sizeof(buf), "%d", (int)lroundf(d.altFt));
+        {
+            ImVec2 a{clipMax.x - 4.f - 76.f, cy - 14.f}, b{clipMax.x - 4.f, cy + 14.f};
+            dl->AddRect(a, b, HUD_COL, 2.f, 0, 2.f);
+            ImVec2 ts = ImGui::CalcTextSize(buf);
+            dl->AddText({b.x - ts.x - 6.f, cy - ts.y * 0.5f}, HUD_COL, buf);
+            ImVec2 tl = ImGui::CalcTextSize("ALT FT");
+            dl->AddText({b.x - tl.x, a.y - 18.f}, HUD_COL_DIM, "ALT FT");
+        }
+    }
+
+    // ── Bloco de status (canto inferior direito do combiner) ────────────────
+    // RALT | GEAR UP/DOWN | REV (se deployado) | THR %
+    {
+        char buf[24];
+        float lineH = ImGui::GetTextLineHeight() + 3.f;
+        float x1 = clipMax.x - 6.f;
+        float y  = clipMax.y - 6.f - lineH * 4.f;
+        auto textR = [&](ImU32 col, const char* s){
+            ImVec2 ts = ImGui::CalcTextSize(s);
+            dl->AddText({x1 - ts.x, y}, col, s);
+            y += lineH;
+        };
+
+        snprintf(buf, sizeof(buf), "RALT %d", (int)lroundf(d.raltFt));
+        textR(HUD_COL, buf);
+
+        if (d.gearPos > 0.99f)      textR(HUD_COL, "GEAR DOWN");
+        else if (d.gearPos < 0.01f) textR(HUD_COL_DIM, "GEAR UP");
+        else                        textR(HUD_COL, "GEAR TRANS");
+
+        if (d.reverser) textR(IM_COL32(255, 200, 40, 235), "REV");
+        else            y += lineH;   // mantém o bloco estável sem o REV
+
+        snprintf(buf, sizeof(buf), "THR %d%%", (int)lroundf(d.throttle * 100.f));
+        textR(HUD_COL, buf);
     }
 
     dl->PopClipRect();

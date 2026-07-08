@@ -851,6 +851,28 @@ int main(){
                 inp.throttle[1] = gmOut.throttle[1];
             }
 
+            // 2.7. Reverso automático no freio: segurando o freio (X/Cruz ou
+            // tecla B) no solo acima de 60 kt CAS, deploya o reversor e
+            // comanda 50% de manete. Desce de 60 kt (stow padrão de rollout)
+            // ou solta o freio → reversor desarma e manete corta pra 0%.
+            // Depois do gmOut pra ganhar de qualquer A/THR ainda engatado.
+            {
+                static bool autoRevActive = false;
+                bool want = inp.brake > 0.5f && acSt.wow && tel.cas > 60.0;
+                if (want) {
+                    autoRevActive   = true;
+                    axes.reverser   = true;
+                    inp.reverser    = true;
+                    inp.throttle[0] = inp.throttle[1] = 0.5f;
+                } else if (autoRevActive) {
+                    autoRevActive   = false;
+                    axes.reverser   = false;
+                    inp.reverser    = false;
+                    axes.thr        = 0.f;
+                    inp.throttle[0] = inp.throttle[1] = 0.f;
+                }
+            }
+
             // 3. Roda as leis FBW → comandos de superfície
             fbw.update((float)dt, inp, acSt, surfCmd);
 
@@ -1031,13 +1053,22 @@ int main(){
 
         minimap.processUploads();   // sobe tiles OSM baixados p/ GPU (thread principal)
 
-        // ── HUD sintético (só na câmera Nose): pitch ladder + waterline + FPV ─
-        // Conformal: usa a MESMA view/proj da cena, então os degraus alinham
-        // com o horizonte 3D e acompanham o roll automaticamente.
+        // ── HUD sintético (só na câmera Nose) ─────────────────────────────────
+        // Atitude conformal (ladder/waterline/FPV) + fita de heading, caixas
+        // de CAS/ALT e bloco de status fixos na tela.
         if (axes.camMode == CamMode::Nose && fdmOk && !paused) {
+            Hud::Data hd;
+            hd.yawRad   = tel.yaw;
+            hd.pitchRad = tel.pitch;
             // Velocidade NED → frame render (X=Leste, Y=cima, Z=Sul)
-            glm::vec3 velWorld{(float)tel.vEast, (float)-tel.vDown, (float)-tel.vNorth};
-            Hud::draw(view, proj, tel.yaw, tel.pitch, velWorld, fw, fh);
+            hd.velWorld = {(float)tel.vEast, (float)-tel.vDown, (float)-tel.vNorth};
+            hd.casKt    = (float)tel.cas;
+            hd.altFt    = (float)tel.altBaro;
+            hd.raltFt   = (float)tel.altAgl;
+            hd.gearPos  = gearAnimPos;
+            hd.reverser = surfCmd.reverser;
+            hd.throttle = (float)tel.throttle;
+            Hud::draw(view, proj, hd, fw, fh);
         }
 
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
@@ -1331,10 +1362,20 @@ int main(){
                 ImGuiWindowFlags_NoScrollbar| ImGuiWindowFlags_NoScrollWithMouse |
                 ImGuiWindowFlags_NoBackground);
             ImVec2 pfdPos = ImGui::GetWindowPos();
+            // FPV: γ = asin(-vDown/|v|), deriva = track − heading (wrap ±180°)
+            float spdFps = (float)sqrt(tel.vNorth*tel.vNorth + tel.vEast*tel.vEast
+                                       + tel.vDown*tel.vDown);
+            bool  showFpv = spdFps > 8.f;   // ~5 kt
+            float fpaDeg = 0.f, driftDeg = 0.f;
+            if (showFpv) {
+                fpaDeg  = (float)(asin(std::clamp(-tel.vDown / spdFps, -1.0, 1.0)) * RAD2DEG);
+                double track = atan2(tel.vEast, tel.vNorth);
+                driftDeg = (float)(fmod((track - tel.yaw) * RAD2DEG + 540.0, 360.0) - 180.0);
+            }
             PFD::drawPanel(pfdPos, {pfdW, pfdH},
                            (float)(tel.pitch * RAD2DEG), (float)(tel.roll * RAD2DEG),
                            (float)tel.betaDeg, (float)tel.cas, (float)tel.altBaro,
-                           (float)tel.vsFpm);
+                           (float)tel.vsFpm, fpaDeg, driftDeg, showFpv);
             ImGui::End();
             ImGui::PopStyleVar();
         }

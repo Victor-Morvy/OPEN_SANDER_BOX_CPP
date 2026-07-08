@@ -2,24 +2,36 @@
 #include <glm/glm.hpp>
 
 // HUD sintético (synthetic vision) para a câmera "Nose" — símbolos verdes
-// clássicos de HUD, desenhados via ImGui draw list, mas CONFORMAIS com a
-// cena 3D: cada degrau é uma direção no MUNDO (heading do avião + pitch do
-// degrau) projetada pela mesma view/proj da câmera — com roll ou head-look,
-// a escada gira/desloca junto com o horizonte renderizado de verdade.
+// clássicos de HUD, desenhados via ImGui draw list. Os símbolos de atitude
+// (pitch ladder, waterline, FPV) são CONFORMAIS com a cena 3D: direções no
+// MUNDO projetadas pela mesma view/proj da câmera — alinham com o horizonte
+// renderizado e giram com o roll de graça. Os demais (fita de heading,
+// caixas de velocidade/altitude, bloco de status) são fixos na tela, dentro
+// da área do combiner.
 namespace Hud {
 
-// Pitch ladder (degraus a cada 5°, rotulados a cada 10°, tracejados abaixo
-// do horizonte) + linha d'água (waterline/boresight): símbolo fixo na
-// direção em que o NARIZ aponta (yaw+pitch do avião), não no centro da tela.
-// + Flight path vector (círculo com asas e cauda): direção do vetor
-// VELOCIDADE — pra onde o avião está indo de fato (inclui alpha/beta/vento).
-// view/proj: câmera atual (Nose). yaw/pitch em rad (convenção
-// Telemetry/JSBSim: pitch + = nariz para cima). velWorld: velocidade no
-// frame render (X=Leste, Y=cima, Z=Sul) — só a direção importa; abaixo de
-// ~5 kt o FPV é omitido (direção sem significado no solo parado).
+struct Data {
+    double     yawRad   = 0;      // heading (rad, convenção JSBSim)
+    double     pitchRad = 0;      // pitch do avião (rad, + = nariz p/ cima)
+    glm::vec3  velWorld{0.f};     // velocidade no frame render (X=E,Y=cima,Z=S)
+    float      casKt    = 0.f;    // velocidade calibrada (kt)
+    float      altFt    = 0.f;    // altitude baro MSL (ft)
+    float      raltFt   = 0.f;    // rádio-altitude / AGL (ft)
+    float      gearPos  = 1.f;    // 0=recolhido, 1=baixado (posição animada)
+    bool       reverser = false;  // reversor DEPLOYADO (estado real pós-FBW)
+    float      throttle = 0.f;    // manete comandada 0..1 (cmd efetivo FADEC)
+};
+
+// Desenha o HUD completo:
+//  - pitch ladder (5°/10°, tracejada abaixo do horizonte) — conformal
+//  - waterline ─\_/─ na direção do NARIZ (yaw+pitch) — conformal
+//  - flight path vector (círculo+asas+cauda) na direção da VELOCIDADE —
+//    conformal; omitido abaixo de ~5 kt
+//  - fita de heading no topo (ticks 5°/10°, rótulos, caret central)
+//  - caixa de velocidade (CAS) à esquerda, altitude (MSL) à direita
+//  - bloco inferior direito: RALT, GEAR UP/DOWN, REV (se ativo), THR %
 // Deve ser chamado entre ImGui::NewFrame() e ImGui::Render().
-void draw(const glm::mat4& view, const glm::mat4& proj,
-          double yawRad, double pitchRad, const glm::vec3& velWorld,
+void draw(const glm::mat4& view, const glm::mat4& proj, const Data& d,
           int fw, int fh);
 
 }

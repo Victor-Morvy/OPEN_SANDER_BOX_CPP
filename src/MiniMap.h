@@ -32,6 +32,9 @@ public:
         float  leElevM, heElevM;   // MSL [m]
     };
 
+    // Ponto de trajetória prevista (trend vector do HSD)
+    struct PathPt { double lat, lon; };
+
     // Preenchido quando o clique do picker "gruda" numa cabeceira:
     // posição = cabeceira, proa = decolagem (cabeceira → outra ponta)
     struct RwyPick {
@@ -46,10 +49,13 @@ public:
     void processUploads();
 
     // Desenha o HSD ocupando `size` a partir do cursor da janela ImGui atual.
-    // Scroll sobre o widget altera hsdZoom.
+    // Scroll sobre o widget altera hsdZoom. `pred` = trajetória prevista
+    // (trend vector — curva que o avião fará nos próximos segundos, calculada
+    // pelo chamador com ground speed + turn rate), desenhada como polilinha.
     void drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                  const std::vector<Poi>* pois = nullptr,
-                 const std::vector<Rwy>* rwys = nullptr);
+                 const std::vector<Rwy>* rwys = nullptr,
+                 const std::vector<PathPt>* pred = nullptr);
 
     // Mapa de seleção. Retorna true no frame em que o usuário clicou
     // (selLat/selLon recebem a posição do clique). Marcador em selLat/selLon,

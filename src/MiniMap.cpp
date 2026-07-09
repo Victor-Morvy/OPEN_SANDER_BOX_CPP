@@ -327,7 +327,8 @@ static void drawPoisOverlay(ImDrawList* dl, const Xform& xf,
 
 void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                       const std::vector<Poi>* pois,
-                      const std::vector<Rwy>* rwys) {
+                      const std::vector<Rwy>* rwys,
+                      const std::vector<PathPt>* pred) {
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
     ImGui::InvisibleButton("##hsd", size);
@@ -355,6 +356,20 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                                      /*fishbone=*/hsdZoom >= 9,
                                      /*idents=*/hsdZoom >= 12);
         if (pois) drawPoisOverlay(dl, xf, *pois, p0, p1);
+
+        // Trend vector: curva prevista (GS + turn rate), verde, com ponto
+        // cheio na extremidade (posição estimada no fim do horizonte de
+        // predição). Gira com o mapa como os demais overlays.
+        if (pred && pred->size() >= 2) {
+            const ImU32 col = IM_COL32(120, 255, 120, 230);
+            ImVec2 prev = xf.pt((*pred)[0].lat, (*pred)[0].lon);
+            for (size_t i = 1; i < pred->size(); ++i) {
+                ImVec2 cur = xf.pt((*pred)[i].lat, (*pred)[i].lon);
+                dl->AddLine(prev, cur, col, 2.5f);
+                prev = cur;
+            }
+            dl->AddCircleFilled(prev, 3.5f, col);
+        }
     }
 
     // anel de alcance + marcador N girando com o mapa

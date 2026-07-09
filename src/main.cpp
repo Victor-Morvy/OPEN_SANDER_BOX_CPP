@@ -719,6 +719,10 @@ int main(){
     Telemetry tel;
     WorldPos  wpos;
     float     terrainElev_m = 0.f;
+    // Taxa de proa ψ̇ (°/s) p/ o trend vector do HSD — das taxas de corpo:
+    // ψ̇ = (q·senφ + r·cosφ)/cosθ (não é só o r: numa curva coordenada
+    // inclinada boa parte da taxa de proa vem do q)
+    float     predPsiDotDegS = 0.f;
     double lastTime  = glfwGetTime();
     double simScale  = 1.0;
     float  localHour = 10.5f;
@@ -893,6 +897,15 @@ int main(){
 
             // 2. Lê estado atual do JSBSim → FBW
             FlyByWire::AircraftState acSt = fdm.getStateForFBW();
+
+            // Taxa de proa p/ o trend vector do HSD (ver declaração)
+            {
+                const float D2Rf = (float)(1.0 / RAD2DEG);
+                float phi = acSt.rollDeg * D2Rf, tht = acSt.pitchDeg * D2Rf;
+                predPsiDotDegS = (acSt.pitchRateDegS * sinf(phi)
+                                + acSt.yawRateDegS   * cosf(phi))
+                               / std::max(0.2f, cosf(tht));
+            }
 
             // Reversor não arma em voo: limpa o toggle se sem peso nas rodas
             if (!acSt.wow) axes.reverser = false;
@@ -1465,8 +1478,35 @@ int main(){
                 ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoScrollbar| ImGuiWindowFlags_NoScrollWithMouse |
                 ImGuiWindowFlags_NoBackground);
+            // Trend vector: integra ground speed (vetor vN/vE do JSBSim) +
+            // taxa de proa ψ̇ por 5 s (passos de 0.25 s) — a curva que o
+            // avião fará mantendo a curva atual.
+            static std::vector<MiniMap::PathPt> predPath;
+            predPath.clear();
+            {
+                double gsFps = sqrt(tel.vNorth * tel.vNorth
+                                  + tel.vEast  * tel.vEast);
+                if (gsFps > 10.0) {                       // parado não desenha
+                    double gsMs = gsFps * FT2M;
+                    double trk  = atan2(tel.vEast, tel.vNorth);   // rad, 0=N
+                    double w    = predPsiDotDegS / RAD2DEG;       // rad/s
+                    double px = wpos.x, pz = wpos.z;
+                    constexpr double PDT = 0.25;
+                    for (double t = 0.0; t <= 5.0 + 1e-6; t += PDT) {
+                        MiniMap::PathPt pp;
+                        geo::toLatLon(px, pz, ORIGIN_LAT, ORIGIN_LON,
+                                      pp.lat, pp.lon);
+                        predPath.push_back(pp);
+                        px  += gsMs * PDT * sin(trk);
+                        pz  -= gsMs * PDT * cos(trk);
+                        trk += w * PDT;
+                    }
+                }
+            }
+
             minimap.drawHSD({mmSz, mmSz}, aLat, aLon,
-                            (float)(tel.yaw * RAD2DEG), &hsdPois, &hsdRwys);
+                            (float)(tel.yaw * RAD2DEG), &hsdPois, &hsdRwys,
+                            &predPath);
             ImGui::End();
             ImGui::PopStyleVar();
         }

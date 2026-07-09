@@ -20,18 +20,25 @@ namespace PFD {
 //   locDevDeg + = voar pra direita (losango do LOC à direita), escala ±2.5°
 //   gsDevDeg  + = voar pra cima (losango do GS acima),         escala ±0.7°
 //   ilsLabel/ilsDistNm: identificação e distância à cabeceira.
+// Flight Director (fdOn): cruz de comando magenta presa à TELA (não à bola),
+// desloca conforme o erro entre fdPitchDeg/fdBankDeg (GuidanceModule::fd) e
+// a atitude atual — o piloto centraliza o símbolo fixo da aeronave nela.
+// Fica ativa mesmo sem o AP acoplado (é o Flight Director, não o AP).
 void drawPanel(ImVec2 pos, ImVec2 size,
                float pitchDeg, float rollDeg, float betaDeg,
                float speedKt, float altFt, float vsFpm,
                float fpaDeg, float driftDeg, bool showFpv,
                bool ilsOn = false, float locDevDeg = 0.f, float gsDevDeg = 0.f,
-               const char* ilsLabel = "", float ilsDistNm = 0.f);
+               const char* ilsLabel = "", float ilsDistNm = 0.f,
+               bool fdOn = false, float fdPitchDeg = 0.f, float fdBankDeg = 0.f);
 
 // Só o ADI (horizonte + escada de pitch + escala/ponteiro de bank + slip/skid
-// + FPV + cruzeta ILS), sem as fitas laterais — exposto à parte para reuso.
+// + FPV + cruzeta ILS + cruz do FD), sem as fitas laterais — exposto à parte
+// para reuso.
 void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float betaDeg,
                   float fpaDeg, float driftDeg, bool showFpv,
                   bool ilsOn = false, float locDevDeg = 0.f, float gsDevDeg = 0.f,
-                  const char* ilsLabel = "", float ilsDistNm = 0.f);
+                  const char* ilsLabel = "", float ilsDistNm = 0.f,
+                  bool fdOn = false, float fdPitchDeg = 0.f, float fdBankDeg = 0.f);
 
 }

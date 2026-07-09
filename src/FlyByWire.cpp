@@ -238,8 +238,8 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     //  Steering do nariz usa apenas o sinal direto dos pedais (sem damper)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
-        if (st.wow || law == Law::Direct) {
-            // No solo ou Direct Law: pedais diretos, sem aumentação
+        if (st.wow || law == Law::Direct || !_ydOn) {
+            // No solo, Direct Law ou YD desligado: pedais diretos, sem aumentação
             out.rudder  = clamp1(inp.pedals);
             _betaFilt   = st.betaDeg;   // reseta filtro
             _betaInteg  = 0.f;

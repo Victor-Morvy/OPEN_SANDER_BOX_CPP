@@ -688,6 +688,7 @@ int main(){
     FlyByWire       fbw;
     GuidanceModule  gm;
     bool            guidancePanelOpen = false;
+    bool            flightPlanWinOpen = false;   // janela separada p/ editar altitude (VNAV)
     MiniMap         minimap;
     bool            showMinimap       = true;   // tecla M
 
@@ -800,26 +801,33 @@ int main(){
             f1Prev = f1Now;
 
             if (fdmOk && !paused) {
-                // Z / Select — toggle Attitude Hold
+                // Z / Select — atalho rápido do AP master (liga/desliga o
+                // acoplamento). ATT HOLD é o modo básico de fallback, então
+                // "desligar" aqui precisa desacoplar o AP de vez — só
+                // desengajar o modo faria o fallback do update() reengajar
+                // ATT HOLD sozinho no frame seguinte (ver GuidanceModule.cpp).
                 bool zNow = glfwGetKey(win, GLFW_KEY_Z) == GLFW_PRESS || axes.apBtn;
                 if (zNow && !zPrev) {
-                    if (gm.mode.vert == GuidanceModule::VertMode::AttitudeHold) {
+                    if (gm.apCoupled && gm.mode.vert == GuidanceModule::VertMode::AttitudeHold
+                                     && gm.mode.lat  == GuidanceModule::LatMode::Off) {
+                        gm.disengageAP();
                         gm.disengageVert();
                     } else {
                         FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
-                        gm.engageAttitude(acStAp, fbw);
+                        gm.engageAP(acStAp, fbw);
                     }
                 }
                 zPrev = zNow;
 
-                // H / Circle — toggle Altitude Hold
+                // H / Circle — toggle Altitude Hold (atalho rápido: já acopla o AP)
                 bool hNow = glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS || axes.altBtn;
                 if (hNow && !hPrev) {
                     if (gm.mode.vert == GuidanceModule::VertMode::AltitudeHold) {
-                        gm.disengageVert();
+                        gm.disengageVert();   // AP continua acoplado → cai no básico (ATT HOLD)
                     } else {
                         FlyByWire::AircraftState acStAp = fdm.getStateForFBW();
                         gm.engageAltitude(acStAp, fbw);
+                        gm.apCoupled = true;
                     }
                 }
                 hPrev = hNow;
@@ -911,6 +919,12 @@ int main(){
             if (!acSt.wow) axes.reverser = false;
 
             // 2.5. GuidanceModule: modifica inp antes do FBW
+            // ILS do frame anterior (computado depois, no bloco "ILS sintético"
+            // abaixo, com wpos já atualizado) — defasagem de 1 frame, irrelevante
+            // pra um loop de guidance rodando a dezenas de Hz.
+            gm.ils.valid     = ilsArmed && ilsArmedApp.valid;
+            gm.ils.locDevDeg = ilsArmedApp.locDevDeg;
+            gm.ils.gsDevDeg  = ilsArmedApp.gsDevDeg;
             gm.update((float)dt, acSt, inp, fbw, gmOut);
             if (gmOut.overrideThrottle) {
                 inp.throttle[0] = gmOut.throttle[0];
@@ -1242,24 +1256,33 @@ int main(){
             auto vm = gm.mode.vert;
             auto lm = gm.mode.lat;
             auto tm = gm.mode.thr;
+            // AP acoplado voa de fato; senão é só o FD armado (barras no PFD,
+            // piloto voa manualmente seguindo-as) — ver GuidanceModule::apCoupled.
+            const char* apPfx = gm.apCoupled ? "AP" : "FD";
             if (vm == GuidanceModule::VertMode::AltitudeHold) {
                 if (gm.targets.vsManual)
                     ImGui::TextColored({.2f,.8f,1.f,1.f},
-                        "AP ALT  %5.0f ft  V/S%+.0f",
-                        gm.targets.altFt, gm.targets.vsFpm);
+                        "%s ALT  %5.0f ft  V/S%+.0f",
+                        apPfx, gm.targets.altFt, gm.targets.vsFpm);
                 else
                     ImGui::TextColored({.2f,.8f,1.f,1.f},
-                        "AP ALT  %5.0f ft  PCH%+.1f°",
-                        gm.targets.altFt, gm.targets.pitchDeg);
+                        "%s ALT  %5.0f ft  PCH%+.1f°",
+                        apPfx, gm.targets.altFt, gm.targets.pitchDeg);
             } else if (vm == GuidanceModule::VertMode::AttitudeHold) {
                 ImGui::TextColored({.2f,1.f,.4f,1.f},
-                    "AP ATT  PCH%+.1f°  ROL%+.1f°",
-                    gm.targets.pitchDeg, gm.targets.bankDeg);
+                    "%s ATT  PCH%+.1f°  ROL%+.1f°",
+                    apPfx, gm.targets.pitchDeg, gm.targets.bankDeg);
+            } else if (vm == GuidanceModule::VertMode::Vnav) {
+                ImGui::TextColored({.6f,.9f,1.f,1.f},
+                    "%s VNAV  PCH%+.1f°", apPfx, gm.targets.pitchDeg);
             } else if (vm == GuidanceModule::VertMode::Flch) {
                 ImGui::TextColored({1.f,.6f,.9f,1.f},
                     "FLCH %s %5.0f ft @ %3.0f kt",
                     (gm.targets.altFt > tel.altBaro) ? "CLB" : "DES",
                     gm.targets.altFt, gm.targets.speedKt);
+            } else if (vm == GuidanceModule::VertMode::Approach) {
+                ImGui::TextColored({.9f,.5f,1.f,1.f},
+                    "%s APP  %s", apPfx, gm.ils.valid ? "GS capturado" : "armado");
             } else {
                 ImGui::TextColored({.5f,.5f,.5f,1.f},
                     "AP OFF   Z=ATT  H=ALT  F1=AFCS");
@@ -1276,9 +1299,17 @@ int main(){
                 else
                     ImGui::TextColored({.4f,.9f,1.f,1.f}, "LNAV  FIM DO PLANO");
             }
-            if (tm == GuidanceModule::ThrMode::SpeedHold)
-                ImGui::TextColored({.9f,.9f,.2f,1.f},
-                    "A/THR  VMIN %3.0f kt", gm.targets.speedKt);
+            if (lm == GuidanceModule::LatMode::Approach)
+                ImGui::TextColored({.9f,.5f,1.f,1.f},
+                    "%s LOC  %s", apPfx, gm.ils.valid ? "capturado" : "armado");
+            if (tm == GuidanceModule::ThrMode::SpeedHold) {
+                if (gm.targets.speedIsMach)
+                    ImGui::TextColored({.9f,.9f,.2f,1.f},
+                        "A/THR  M%.2f", gm.targets.machTarget);
+                else
+                    ImGui::TextColored({.9f,.9f,.2f,1.f},
+                        "A/THR  VMIN %3.0f kt", gm.targets.speedKt);
+            }
         }
 
         ImGui::Separator();
@@ -1506,9 +1537,68 @@ int main(){
                 }
             }
 
+            // Guidance path: curva que o AP realmente vai voar até capturar
+            // HDG/NAV — simulação à parte (mesmo ganho KP_HDG=3.0 e limite de
+            // bank do GuidanceModule::update), só para desenho, não afeta o
+            // voo. NAV recalcula o alvo a cada passo como bearing pro
+            // waypoint ativo (curva de perseguição, igual ao LNAV real).
+            static std::vector<MiniMap::PathPt> guidancePath;
+            guidancePath.clear();
+            if (gm.mode.lat == GuidanceModule::LatMode::HeadingHold ||
+                gm.mode.lat == GuidanceModule::LatMode::Nav) {
+                double gsFps = sqrt(tel.vNorth * tel.vNorth + tel.vEast * tel.vEast);
+                if (gsFps > 10.0) {
+                    double gsMs   = gsFps * FT2M;
+                    double trkRad = atan2(tel.vEast, tel.vNorth);
+                    double px = wpos.x, pz = wpos.z;
+                    int    wptIdx    = gm.activeWpt;
+                    float  bankLimit = gm.lowBank ? 15.f : 25.f;
+                    constexpr double GDT = 2.0, GMAXT = 400.0, G_MPS2 = 9.80665;
+                    for (double t = 0.0; t <= GMAXT + 1e-6; t += GDT) {
+                        MiniMap::PathPt pp;
+                        geo::toLatLon(px, pz, ORIGIN_LAT, ORIGIN_LON, pp.lat, pp.lon);
+                        guidancePath.push_back(pp);
+
+                        double targetHdgDeg;
+                        if (gm.mode.lat == GuidanceModule::LatMode::Nav) {
+                            if (wptIdx >= (int)gm.fplan.size()) break;
+                            double wx, wz;
+                            geo::toWorld(gm.fplan[wptIdx].lat, gm.fplan[wptIdx].lon,
+                                        ORIGIN_LAT, ORIGIN_LON, wx, wz);
+                            double dx = wx - px, dz = wz - pz;
+                            double distM = sqrt(dx * dx + dz * dz);
+                            if (distM < 1.5 * 1852.0) { wptIdx++; continue; }
+                            targetHdgDeg = fmod(atan2(dx, -dz) * RAD2DEG + 360.0, 360.0);
+                        } else {
+                            targetHdgDeg = gm.targets.headingDeg;
+                        }
+                        double trkDeg = fmod(trkRad * RAD2DEG + 360.0, 360.0);
+                        double hdgErr = targetHdgDeg - trkDeg;
+                        while (hdgErr >  180.0) hdgErr -= 360.0;
+                        while (hdgErr < -180.0) hdgErr += 360.0;
+                        double bankDeg = std::clamp(3.0 * hdgErr,
+                                                    -(double)bankLimit, (double)bankLimit);
+                        double turnRateRadS = (G_MPS2 * tan(bankDeg / RAD2DEG))
+                                             / std::max(gsMs, 1.0);
+                        trkRad += turnRateRadS * GDT;
+                        px += gsMs * GDT * sin(trkRad);
+                        pz -= gsMs * GDT * cos(trkRad);
+                    }
+                }
+            }
+
+            // Rota do plano de voo: liga TODOS os waypoints em ordem (rosa),
+            // independente do modo ativo — preview do plano completo.
+            static std::vector<MiniMap::PathPt> routeLine;
+            routeLine.clear();
+            if (!gm.fplan.empty()) {
+                routeLine.push_back({aLat, aLon});
+                for (auto& w : gm.fplan) routeLine.push_back({w.lat, w.lon});
+            }
+
             minimap.drawHSD({mmSz, mmSz}, aLat, aLon,
                             (float)(tel.yaw * RAD2DEG), &hsdPois, &hsdRwys,
-                            &predPath);
+                            &predPath, &guidancePath, &routeLine);
             ImGui::End();
             ImGui::PopStyleVar();
         }
@@ -1547,7 +1637,8 @@ int main(){
                            pfdIls ? ilsDisp[ilsPfd].locDevDeg : 0.f,
                            pfdIls ? ilsDisp[ilsPfd].gsDevDeg  : 0.f,
                            pfdIls ? ilsDisp[ilsPfd].label.c_str() : "",
-                           pfdIls ? ilsDisp[ilsPfd].distNm : 0.f);
+                           pfdIls ? ilsDisp[ilsPfd].distNm : 0.f,
+                           gm.fd.active, gm.fd.pitchBar, gm.fd.bankBar);
             ImGui::End();
             ImGui::PopStyleVar();
         }
@@ -1757,7 +1848,11 @@ int main(){
                     }
                     if (ilsArmed) {
                         ImGui::SameLine();
-                        if (ImGui::SmallButton("DESARMAR ILS")) ilsArmed = false;
+                        if (ImGui::SmallButton("DESARMAR ILS")) {
+                            ilsArmed = false;
+                            if (gm.mode.lat  == GuidanceModule::LatMode::Approach)  gm.disengageLat();
+                            if (gm.mode.vert == GuidanceModule::VertMode::Approach) gm.disengageVert();
+                        }
                         ImGui::SameLine();
                         ImGui::TextColored({.9f,.5f,1.f,1.f}, "ILS %s armado",
                                            ilsArmedApp.label.c_str());
@@ -1811,9 +1906,20 @@ int main(){
         }
 
         // ── Painel AFCS Guidance (F1) ─────────────────────────────────────────
+        // Layout remodelado em 4 seções para espelhar o Guidance Panel físico
+        // descrito em AFCS_arquitetura_sistemas.md (Parte 2.2): Lateral
+        // Guidance / Flight Guidance Control / Speed Control / Vertical
+        // Guidance. SRC, FD off, VNAV path e IAS/Mach ficam de fora — exigem
+        // um FMS de verdade (velocidade calculada, perfil vertical) que este
+        // simulador não tem; o knob de SPD aqui é sempre "MAN".
         if (guidancePanelOpen && fdmOk) {
-            ImGui::SetNextWindowPos({(float)(fw/2 - 220), 10.f}, ImGuiCond_Always);
-            ImGui::SetNextWindowSize({440.f, 0.f}, ImGuiCond_Always);
+            const float COL_W  = 310.f;
+            const float ROW1_H = 236.f;   // Lateral Guidance / Flight Guidance Control
+            const float ROW2_H = 195.f;   // Speed Control / Vertical Guidance
+            const float BTN_X  = 175.f;
+
+            ImGui::SetNextWindowPos({(float)(fw/2) - 325.f, 10.f}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({650.f, 0.f}, ImGuiCond_Always);
             ImGui::Begin("AFCS GUIDANCE", &guidancePanelOpen,
                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                 ImGuiWindowFlags_NoCollapse);
@@ -1824,43 +1930,46 @@ int main(){
                 if (active) ImGui::PopStyleColor();
                 return clicked;
             };
+            auto sectionHeader = [](const char* title) {
+                ImGui::TextColored({.5f,.75f,1.f,1.f}, "%s", title);
+                ImGui::Separator();
+            };
+            // Perfil de velocidade padrão pedido pelo Victor: climb/descent/
+            // approach fixos em CAS; cruzeiro varia 250->280 kt com a altitude
+            // até o teto de M0.78 — acima de ~FL280 (aproximado, sem modelo de
+            // temperatura ISA completo) o alvo vira Mach constante.
+            auto cruiseTarget = [](float altFt, bool& isMach, float& kt, float& mach) {
+                if (altFt > 28000.f) { isMach = true;  mach = 0.78f; kt = 0.f; }
+                else {
+                    isMach = false;
+                    kt = std::clamp(250.f + (altFt - 10000.f) / 20000.f * 30.f, 250.f, 280.f);
+                    mach = 0.f;
+                }
+            };
 
             FlyByWire::AircraftState acStNow = fdm.getStateForFBW();
 
-            // ── Velocidade mínima (A/THR floor) ───────────────────────────────
-            ImGui::Text("VMIN");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(100.f);
-            ImGui::InputFloat("kt##spd", &gm.targets.speedKt, 1.f, 10.f, "%.0f");
-            ImGui::SameLine(200.f);
-            bool athrOn = gm.mode.thr == GuidanceModule::ThrMode::SpeedHold;
-            if (modeBtn(athrOn ? "A/THR ON##t" : "A/THR##t", athrOn)) {
-                if (athrOn) gm.disengageThrottle();
-                else        gm.engageSpeed(acStNow, axes.thr);
-            }
-            if (athrOn)
-                ImGui::TextColored({.9f,.9f,.2f,1.f},
-                    "  cmd %3.0f%%  lev %3.0f%%",
-                    gmOut.throttle[0]*100.f, axes.thr*100.f);
+            // ══════════════════ LATERAL GUIDANCE ═══════════════════════════════
+            ImGui::BeginChild("##lat", {COL_W, ROW1_H}, true);
+            sectionHeader("LATERAL GUIDANCE");
 
-            // ── Proa ───────────────────────────────────────────────────────────
             ImGui::Text("HDG");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(100.f);
+            ImGui::SameLine(56.f);
+            ImGui::SetNextItemWidth(90.f);
             ImGui::InputFloat("°##hdg", &gm.targets.headingDeg, 1.f, 10.f, "%03.0f");
             gm.targets.headingDeg = fmodf(gm.targets.headingDeg + 360.f, 360.f);
-            ImGui::SameLine(200.f);
+            ImGui::SameLine(BTN_X);
             bool hdgOn = gm.mode.lat == GuidanceModule::LatMode::HeadingHold;
-            if (modeBtn(hdgOn ? "HDG SEL ON##h" : "HDG SEL##h", hdgOn)) {
+            if (modeBtn(hdgOn ? "HDG ON##h" : "HDG##h", hdgOn)) {
                 if (hdgOn) gm.disengageLat();
                 else       gm.engageHeading(acStNow);
             }
 
-            // ── LNAV: flight plan por ICAO ─────────────────────────────────────
+            // LNAV: flight plan por ICAO
             static char icaoBuf[8] = "";
             ImGui::Text("WPT");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(64.f);
+            ImGui::SameLine(56.f);
+            ImGui::SetNextItemWidth(60.f);
             bool icaoEnter = ImGui::InputText("##icao", icaoBuf, sizeof(icaoBuf),
                 ImGuiInputTextFlags_CharsUppercase |
                 ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1872,49 +1981,189 @@ int main(){
                     icaoBuf[0] = 0;
                 }
             }
-            ImGui::SameLine();
+            ImGui::SameLine(BTN_X);
+            bool navOn = gm.mode.lat == GuidanceModule::LatMode::Nav;
+            if (modeBtn(navOn ? "NAV ON##n" : "NAV##n", navOn)) {
+                if (navOn)                  gm.disengageLat();
+                else if (!gm.fplan.empty()) gm.engageLNAV();
+            }
+            // Segunda linha: utilitários do plano (não são modos, então ficam
+            // fora do alinhamento em BTN_X pra não parecer outro botão de modo)
             if (ImGui::SmallButton("CLR##wpt")) {
                 gm.fplan.clear();
                 gm.activeWpt = 0;
                 if (gm.mode.lat == GuidanceModule::LatMode::Nav)
                     gm.disengageLat();
+                if (gm.mode.vert == GuidanceModule::VertMode::Vnav)
+                    gm.disengageVert();
             }
-            // LNAV mais à direita que a coluna padrão (200): o CLR termina
-            // praticamente em cima dela — 280 dá respiro entre CLR e LNAV
-            // (320 ficou longe demais; calibrado visualmente pelo Victor)
-            ImGui::SameLine(280.f);
-            bool navOn = gm.mode.lat == GuidanceModule::LatMode::Nav;
-            if (modeBtn(navOn ? "LNAV ON##n" : "LNAV##n", navOn)) {
-                if (navOn)                  gm.disengageLat();
-                else if (!gm.fplan.empty()) gm.engageLNAV();
-            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("FPLN##openwin"))
+                flightPlanWinOpen = !flightPlanWinOpen;
             for (int i = 0; i < (int)gm.fplan.size(); i++) {
                 bool act = navOn && i == gm.activeWpt;
                 ImGui::TextColored(act ? ImVec4{.4f,.9f,1.f,1.f}
                                        : ImVec4{.55f,.55f,.55f,1.f},
-                    act ? "   %d. %s  %.1f NM  <ATIVO>" : "   %d. %s",
+                    act ? " %d.%s %.1fNM <ATV>" : " %d.%s",
                     i + 1, gm.fplan[i].name.c_str(), gm.navDistNm);
             }
 
-            // ── Altitude ───────────────────────────────────────────────────────
+            // APP: captura LOC/GS do ILS armado no mapa (menu de pausa, tecla P)
+            ImGui::Dummy({0.f, 3.f});
+            bool ilsReady = ilsArmed;
+            bool appOn    = gm.mode.lat == GuidanceModule::LatMode::Approach;
+            ImGui::Text("APP");
+            ImGui::SameLine(56.f);
+            if (!ilsReady)
+                ImGui::TextDisabled("armar ILS no mapa (P)");
+            else if (gm.ils.valid)
+                ImGui::TextColored({.6f,1.f,.6f,1.f}, "%s captado", ilsArmedApp.label.c_str());
+            else
+                ImGui::TextDisabled("%s fora do cone", ilsArmedApp.label.c_str());
+            ImGui::SameLine(BTN_X);
+            ImGui::BeginDisabled(!ilsReady);
+            if (modeBtn(appOn ? "APP ON##app" : "APP##app", appOn)) {
+                if (appOn) { gm.disengageLat(); gm.disengageVert(); }
+                else       gm.engageApproach(acStNow, fbw);
+            }
+            ImGui::EndDisabled();
+
+            // Low Bank / Auto Bank: limita o bank comandado por HDG/NAV/APP
+            ImGui::Dummy({0.f, 3.f});
+            ImGui::Text("BANK");
+            ImGui::SameLine(56.f);
+            ImGui::TextDisabled(gm.lowBank ? "limitado 15°" : "normal 25°");
+            ImGui::SameLine(BTN_X);
+            if (modeBtn(gm.lowBank ? "LOW BANK ON##lb" : "LOW BANK##lb", gm.lowBank))
+                gm.lowBank = !gm.lowBank;
+
+            ImGui::EndChild();
+            ImGui::SameLine();
+
+            // ══════════════════ FLIGHT GUIDANCE CONTROL ════════════════════════
+            ImGui::BeginChild("##fgc", {COL_W, ROW1_H}, true);
+            sectionHeader("FLIGHT GUIDANCE CONTROL");
+
+            ImGui::SetCursorPosX((COL_W - 170.f) * 0.5f);
+            bool apOn = gm.apCoupled;
+            if (modeBtn(apOn ? "AP ON##ap" : "AP OFF##ap", apOn)) {
+                if (apOn) gm.disengageAP();
+                else      gm.engageAP(acStNow, fbw);
+            }
+            ImGui::SameLine();
+            // YD/Turn Coordination — independente do AP/FGCS (doc AFCS).
+            bool ydOn = fbw.yawDamperOn();
+            if (modeBtn(ydOn ? "YD ON##yd" : "YD OFF##yd", ydOn))
+                fbw.setYawDamper(!ydOn);
+
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::Separator();
+            ImGui::TextDisabled("Modo básico (Roll Hold + FPA)");
+            ImGui::Text("PCH");
+            ImGui::SameLine(56.f);
+            ImGui::SetNextItemWidth(80.f);
+            float pch = gm.targets.pitchDeg;
+            if (ImGui::InputFloat("°##pch", &pch, 0.5f, 2.f, "%+.1f"))
+                gm.overridePitch(std::clamp(pch, -15.f, 15.f));
+            ImGui::SameLine();
+            ImGui::Text("ROL");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(80.f);
+            float rol = gm.targets.bankDeg;
+            if (ImGui::InputFloat("°##rol", &rol, 1.f, 5.f, "%+.1f"))
+                gm.overrideBank(std::clamp(rol, -30.f, 30.f), fbw);
+
+            bool attOn = gm.mode.vert == GuidanceModule::VertMode::AttitudeHold;
+            ImGui::SetCursorPosX((COL_W - 140.f) * 0.5f);
+            if (modeBtn(attOn ? "ATT HOLD ON##at" : "ATT HOLD##at", attOn)) {
+                if (attOn) gm.disengageVert();
+                else       gm.engageAttitude(acStNow, fbw);
+            }
+
+            ImGui::EndChild();
+
+            // ══════════════════ SPEED CONTROL ══════════════════════════════════
+            ImGui::BeginChild("##spd", {COL_W, ROW2_H}, true);
+            sectionHeader("SPEED CONTROL");
+
+            ImGui::Text("SPD");
+            ImGui::SameLine(56.f);
+            ImGui::SetNextItemWidth(90.f);
+            if (gm.targets.speedIsMach)
+                ImGui::InputFloat("M##spd", &gm.targets.machTarget, 0.01f, 0.05f, "%.2f");
+            else
+                ImGui::InputFloat("kt (MAN)##spd", &gm.targets.speedKt, 1.f, 10.f, "%.0f");
+            ImGui::SameLine(BTN_X);
+            bool athrOn = gm.mode.thr == GuidanceModule::ThrMode::SpeedHold;
+            if (modeBtn(athrOn ? "A/THR ON##t" : "A/THR##t", athrOn)) {
+                if (athrOn) gm.disengageThrottle();
+                else        gm.engageSpeed(acStNow, axes.thr);
+            }
+            if (athrOn)
+                ImGui::TextColored({.9f,.9f,.2f,1.f},
+                    " cmd %3.0f%%  lev %3.0f%%",
+                    gmOut.throttle[0]*100.f, axes.thr*100.f);
+
+            // IAS/Mach toggle — troca só a interpretação do knob acima (não
+            // converte um valor no outro, o piloto redigita ao trocar).
+            ImGui::Dummy({0.f, 3.f});
+            ImGui::Text("SRC");
+            ImGui::SameLine(56.f);
+            if (modeBtn("IAS##ias", !gm.targets.speedIsMach)) gm.targets.speedIsMach = false;
+            ImGui::SameLine();
+            if (modeBtn("MACH##mach", gm.targets.speedIsMach)) gm.targets.speedIsMach = true;
+
+            // Perfil de velocidade — atalhos pro schedule padrão da E195
+            ImGui::Dummy({0.f, 3.f});
+            ImGui::TextDisabled("Perfil:");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("CLB 220")) {
+                gm.targets.speedIsMach = false;
+                gm.targets.speedKt     = 220.f;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("CRZ")) {
+                bool isMach; float kt, mach;
+                cruiseTarget(acStNow.altBaro, isMach, kt, mach);
+                gm.targets.speedIsMach = isMach;
+                if (isMach) gm.targets.machTarget = mach;
+                else        gm.targets.speedKt    = kt;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("DES 175")) {
+                gm.targets.speedIsMach = false;
+                gm.targets.speedKt     = 175.f;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("APP 145")) {
+                gm.targets.speedIsMach = false;
+                gm.targets.speedKt     = 145.f;
+            }
+
+            ImGui::EndChild();
+            ImGui::SameLine();
+
+            // ══════════════════ VERTICAL GUIDANCE ══════════════════════════════
+            ImGui::BeginChild("##vert", {COL_W, ROW2_H}, true);
+            sectionHeader("VERTICAL GUIDANCE");
+
             ImGui::Text("ALT");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(100.f);
+            ImGui::SameLine(56.f);
+            ImGui::SetNextItemWidth(90.f);
             ImGui::InputFloat("ft##alt", &gm.targets.altFt, 100.f, 1000.f, "%.0f");
-            ImGui::SameLine(200.f);
+            ImGui::SameLine(BTN_X);
             bool altOn = gm.mode.vert == GuidanceModule::VertMode::AltitudeHold;
-            if (modeBtn(altOn ? "ALT SEL ON##a" : "ALT SEL##a", altOn)) {
+            if (modeBtn(altOn ? "ALT ON##a" : "ALT##a", altOn)) {
                 if (altOn) gm.disengageVert();
                 else       gm.engageAltitude(acStNow, fbw);
             }
 
-            // ── Vertical Speed (para Altitude Hold) ────────────────────────────
             ImGui::Text("V/S");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(100.f);
+            ImGui::SameLine(56.f);
+            ImGui::SetNextItemWidth(90.f);
             ImGui::InputFloat("fpm##vs", &gm.targets.vsFpm, 100.f, 500.f, "%+.0f");
             gm.targets.vsFpm = std::clamp(gm.targets.vsFpm, -3000.f, 3000.f);
-            ImGui::SameLine(200.f);
+            ImGui::SameLine(BTN_X);
             bool vsManOn = gm.targets.vsManual;
             if (modeBtn(vsManOn ? "V/S ON##vs" : "V/S##vs", vsManOn)) {
                 if (vsManOn) {
@@ -1934,58 +2183,81 @@ int main(){
                 }
             }
 
-            // ── FLCH: muda de nível pela velocidade (ALT alvo @ SPD alvo) ──────
             ImGui::Text("FLCH");
-            ImGui::SameLine(70.f);
-            ImGui::TextDisabled("→ %5.0f ft @ %3.0f kt",
-                                gm.targets.altFt, gm.targets.speedKt);
-            ImGui::SameLine(200.f);
+            ImGui::SameLine(56.f);
+            if (gm.targets.speedIsMach)
+                ImGui::TextDisabled("->%5.0fft@M%.2f", gm.targets.altFt, gm.targets.machTarget);
+            else
+                ImGui::TextDisabled("->%5.0fft@%3.0fkt", gm.targets.altFt, gm.targets.speedKt);
+            ImGui::SameLine(BTN_X);
             bool flchOn = gm.mode.vert == GuidanceModule::VertMode::Flch;
             if (modeBtn(flchOn ? "FLCH ON##f" : "FLCH##f", flchOn)) {
                 if (flchOn) gm.disengageVert();
                 else        gm.engageFlch(acStNow, fbw);
             }
 
-            ImGui::Separator();
-
-            // ── Atitude (override FCU — não desengaja) ─────────────────────────
-            ImGui::Text("PCH");
-            ImGui::SameLine(70.f);
-            ImGui::SetNextItemWidth(100.f);
-            float pch = gm.targets.pitchDeg;
-            if (ImGui::InputFloat("°##pch", &pch, 0.5f, 2.f, "%+.1f"))
-                gm.overridePitch(std::clamp(pch, -15.f, 15.f));
-            ImGui::SameLine(200.f);
-            ImGui::Text("ROL");
-            ImGui::SameLine(240.f);
-            ImGui::SetNextItemWidth(100.f);
-            float rol = gm.targets.bankDeg;
-            if (ImGui::InputFloat("°##rol", &rol, 1.f, 5.f, "%+.1f"))
-                gm.overrideBank(std::clamp(rol, -30.f, 30.f), fbw);
-
-            ImGui::SetNextItemWidth(200.f);
-            bool attOn = gm.mode.vert == GuidanceModule::VertMode::AttitudeHold;
-            ImGui::SetCursorPosX((440.f - 200.f) * 0.5f);
-            if (modeBtn(attOn ? "ATT HOLD ON##at" : "ATT HOLD##at", attOn)) {
-                if (attOn) gm.disengageVert();
-                else       gm.engageAttitude(acStNow, fbw);
+            // VNAV: segue o perfil dado pelas altitudes dos waypoints (editar
+            // na janela FPLN, botão ao lado de WPT em LATERAL GUIDANCE)
+            ImGui::Text("VNAV");
+            ImGui::SameLine(56.f);
+            {
+                int nAlt = 0;
+                for (auto& w : gm.fplan) if (w.hasAlt) nAlt++;
+                if (nAlt == 0)
+                    ImGui::TextDisabled("sem waypoint c/ altitude (FPLN)");
+                else if (gm.mode.vert == GuidanceModule::VertMode::Vnav &&
+                         gm.vnavTargetWpt >= 0 && gm.vnavTargetWpt < (int)gm.fplan.size())
+                    ImGui::TextColored({.6f,.9f,1.f,1.f}, "-> %s %5.0fft",
+                        gm.fplan[gm.vnavTargetWpt].name.c_str(),
+                        gm.fplan[gm.vnavTargetWpt].altFt);
+                else
+                    ImGui::TextDisabled("%d restricao(oes) no plano", nAlt);
             }
-
-            ImGui::Separator();
-
-            // ── AP master ──────────────────────────────────────────────────────
-            ImGui::SetCursorPosX((440.f - 140.f) * 0.5f);
-            bool apOn = gm.isEngaged();
-            if (modeBtn(apOn ? "AP ON##ap" : "AP OFF##ap", apOn)) {
-                if (apOn) {
-                    gm.disengageVert();
-                    gm.disengageLat();
-                } else {
-                    gm.engageAttitude(acStNow, fbw);
-                }
+            ImGui::SameLine(BTN_X);
+            bool vnavOn = gm.mode.vert == GuidanceModule::VertMode::Vnav;
+            ImGui::BeginDisabled(!vnavOn && gm.fplan.empty());
+            if (modeBtn(vnavOn ? "VNAV ON##vn" : "VNAV##vn", vnavOn)) {
+                if (vnavOn) gm.disengageVert();
+                else        gm.engageVnav(acStNow, fbw);
             }
+            ImGui::EndDisabled();
+
+            ImGui::EndChild();
 
             ImGui::TextDisabled("F1 = fechar painel");
+            ImGui::End();
+        }
+
+        // ── Janela separada: plano de voo com restrição de altitude (VNAV) ────
+        if (flightPlanWinOpen && fdmOk) {
+            ImGui::SetNextWindowSize({420.f, 0.f}, ImGuiCond_FirstUseEver);
+            ImGui::Begin("FLIGHT PLAN", &flightPlanWinOpen);
+            ImGui::TextDisabled("Restricao de altitude por waypoint (perfil VNAV)");
+            ImGui::Separator();
+            if (gm.fplan.empty())
+                ImGui::TextDisabled("Nenhum waypoint — adicione em LATERAL GUIDANCE (WPT)");
+            for (int i = 0; i < (int)gm.fplan.size(); i++) {
+                ImGui::PushID(i);
+                auto& w = gm.fplan[i];
+                bool act = i == gm.activeWpt && gm.mode.lat == GuidanceModule::LatMode::Nav;
+                ImGui::TextColored(act ? ImVec4{.4f,.9f,1.f,1.f} : ImVec4{.85f,.85f,.85f,1.f},
+                    "%d. %s", i + 1, w.name.c_str());
+                ImGui::SameLine(90.f);
+                ImGui::Checkbox("ALT##has", &w.hasAlt);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90.f);
+                ImGui::BeginDisabled(!w.hasAlt);
+                ImGui::InputFloat("ft##wptalt", &w.altFt, 100.f, 1000.f, "%.0f");
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                bool del = ImGui::SmallButton("DEL");
+                ImGui::PopID();
+                if (del) {
+                    gm.fplan.erase(gm.fplan.begin() + i);
+                    if (gm.activeWpt > i) gm.activeWpt--;
+                    break;   // vetor mudou de tamanho — encerra o loop deste frame com segurança
+                }
+            }
             ImGui::End();
         }
 

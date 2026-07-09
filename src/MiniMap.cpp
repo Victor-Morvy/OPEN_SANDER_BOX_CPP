@@ -281,6 +281,18 @@ static void drawRunwaysOverlay(ImDrawList* dl, const Xform& xf,
     }
 }
 
+// Polilinha com halo preto por baixo — legível sobre qualquer cor de tile
+// (satélite claro, água escura, floresta verde etc.)
+static void drawOutlinedPolyline(ImDrawList* dl, const Xform& xf,
+                                 const std::vector<MiniMap::PathPt>& pts,
+                                 ImU32 col, float thick) {
+    if (pts.size() < 2) return;
+    std::vector<ImVec2> sp(pts.size());
+    for (size_t i = 0; i < pts.size(); ++i) sp[i] = xf.pt(pts[i].lat, pts[i].lon);
+    dl->AddPolyline(sp.data(), (int)sp.size(), IM_COL32(0, 0, 0, 210), 0, thick + 2.5f);
+    dl->AddPolyline(sp.data(), (int)sp.size(), col, 0, thick);
+}
+
 static void drawPoisOverlay(ImDrawList* dl, const Xform& xf,
                             const std::vector<MiniMap::Poi>& pois,
                             ImVec2 p0, ImVec2 p1) {
@@ -328,7 +340,9 @@ static void drawPoisOverlay(ImDrawList* dl, const Xform& xf,
 void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                       const std::vector<Poi>* pois,
                       const std::vector<Rwy>* rwys,
-                      const std::vector<PathPt>* pred) {
+                      const std::vector<PathPt>* pred,
+                      const std::vector<PathPt>* guidancePath,
+                      const std::vector<PathPt>* route) {
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
     ImGui::InvisibleButton("##hsd", size);
@@ -357,18 +371,27 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                                      /*idents=*/hsdZoom >= 12);
         if (pois) drawPoisOverlay(dl, xf, *pois, p0, p1);
 
-        // Trend vector: curva prevista (GS + turn rate), verde, com ponto
-        // cheio na extremidade (posição estimada no fim do horizonte de
-        // predição). Gira com o mapa como os demais overlays.
+        // Rota do plano de voo: liga os waypoints em rosa (referência
+        // geométrica do plano, sem curvatura — desenhada ANTES das curvas
+        // pra ficar por baixo delas).
+        if (route && route->size() >= 2)
+            drawOutlinedPolyline(dl, xf, *route, IM_COL32(255, 90, 220, 235), 2.f);
+
+        // Trend vector: curva prevista (GS + turn rate atual), verde, com
+        // ponto cheio na extremidade. Gira com o mapa como os demais overlays.
         if (pred && pred->size() >= 2) {
             const ImU32 col = IM_COL32(120, 255, 120, 230);
-            ImVec2 prev = xf.pt((*pred)[0].lat, (*pred)[0].lon);
-            for (size_t i = 1; i < pred->size(); ++i) {
-                ImVec2 cur = xf.pt((*pred)[i].lat, (*pred)[i].lon);
-                dl->AddLine(prev, cur, col, 2.5f);
-                prev = cur;
-            }
-            dl->AddCircleFilled(prev, 3.5f, col);
+            drawOutlinedPolyline(dl, xf, *pred, col, 2.5f);
+            dl->AddCircleFilled(xf.pt(pred->back().lat, pred->back().lon), 3.5f, col);
+        }
+
+        // Guidance path: curva que o AP vai voar até capturar HDG/NAV
+        // (simulada pelo chamador com o mesmo ganho do GuidanceModule),
+        // amarelo — distinta do trend vector (verde, é só física atual).
+        if (guidancePath && guidancePath->size() >= 2) {
+            const ImU32 col = IM_COL32(255, 210, 40, 235);
+            drawOutlinedPolyline(dl, xf, *guidancePath, col, 2.5f);
+            dl->AddCircleFilled(xf.pt(guidancePath->back().lat, guidancePath->back().lon), 3.5f, col);
         }
     }
 

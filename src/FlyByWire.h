@@ -126,7 +126,15 @@ public:
     // Permite ao autopiloto definir o banco-alvo diretamente
     void setTargetBank(float deg) { _targetBank = deg; }
 
+    // ── Yaw Damper (YD) — toggle independente do AP/FGCS ──────────────────────
+    // Doc AFCS: "YD funciona independentemente do AP e do flight guidance";
+    // desligar o YD tira o amortecimento de Dutch roll E o auto-rudder (beta),
+    // caindo no mesmo caminho de pedal direto usado no solo/Direct Law.
+    void setYawDamper(bool on) { _ydOn = on; }
+    bool yawDamperOn() const   { return _ydOn; }
+
 private:
+    bool _ydOn = true;   // real: normalmente ligado por padrão até o piloto desligar
     static constexpr float DEG2RAD = 3.14159265f / 180.f;
 
     // Proteções de envelope

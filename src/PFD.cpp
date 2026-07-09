@@ -120,7 +120,8 @@ static void drawVsiStrip(ImDrawList* dl, ImVec2 pos, ImVec2 size, float vsFpm) {
 void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float betaDeg,
                   float fpaDeg, float driftDeg, bool showFpv,
                   bool ilsOn, float locDevDeg, float gsDevDeg,
-                  const char* ilsLabel, float ilsDistNm) {
+                  const char* ilsLabel, float ilsDistNm,
+                  bool fdOn, float fdPitchDeg, float fdBankDeg) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 center(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
     ImVec2 pMax(pos.x + size.x, pos.y + size.y);
@@ -241,6 +242,22 @@ void drawAttitude(ImVec2 pos, ImVec2 size, float pitchDeg, float rollDeg, float 
         dl->AddLine(t0,  t1,  fpvCol, 2.f);
     }
 
+    // ── Flight Director: cruz de comando presa à TELA (não à bola) ──────────
+    // Desloca conforme o erro entre alvo do FD e atitude atual — ativa mesmo
+    // sem AP acoplado (é o "voe pra cá", não "o AP está voando pra cá").
+    if (fdOn) {
+        const ImU32 fdCol = IM_COL32(255, 0, 220, 255);
+        float pitchErr = std::clamp(fdPitchDeg - pitchDeg, -15.f, 15.f);
+        float bankErr  = std::clamp(fdBankDeg  - rollDeg,  -25.f, 25.f);
+        const float kBankPx = (size.x * 0.5f) / 25.f;
+        float cx = std::clamp(center.x + bankErr  * kBankPx, pos.x + 20.f, pMax.x - 20.f);
+        float cy = std::clamp(center.y - pitchErr * pxPerDeg, pos.y + 20.f, pMax.y - 20.f);
+        float barLen = size.x * 0.14f;
+        dl->AddLine({cx - barLen, cy}, {cx + barLen, cy}, fdCol, 4.f);
+        dl->AddLine({cx, cy - barLen}, {cx, cy + barLen}, fdCol, 4.f);
+        dl->AddCircle({cx, cy}, 5.f, fdCol, 16, 2.f);
+    }
+
     // ── Slip/skid: trapézio numa trilha fixa logo abaixo do índice de bank ───
     // Não gira com o roll (fica preso ao case, como num ADI real) — desliza
     // lateralmente com beta. Mesma convenção de sinal do painel SUPERFICIES.
@@ -313,7 +330,8 @@ void drawPanel(ImVec2 pos, ImVec2 size,
                float speedKt, float altFt, float vsFpm,
                float fpaDeg, float driftDeg, bool showFpv,
                bool ilsOn, float locDevDeg, float gsDevDeg,
-               const char* ilsLabel, float ilsDistNm) {
+               const char* ilsLabel, float ilsDistNm,
+               bool fdOn, float fdPitchDeg, float fdBankDeg) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const float spdW = size.x * 0.155f;
@@ -329,7 +347,8 @@ void drawPanel(ImVec2 pos, ImVec2 size,
     drawSpeedTape(dl, spdPos, {spdW, size.y}, speedKt);
     drawAttitude(adiPos, {adiW, size.y}, pitchDeg, rollDeg, betaDeg,
                  fpaDeg, driftDeg, showFpv,
-                 ilsOn, locDevDeg, gsDevDeg, ilsLabel, ilsDistNm);
+                 ilsOn, locDevDeg, gsDevDeg, ilsLabel, ilsDistNm,
+                 fdOn, fdPitchDeg, fdBankDeg);
     drawAltTape(dl, altPos, {altW, size.y}, altFt);
     drawVsiStrip(dl, vsPos, {vsW, size.y}, vsFpm);
 }

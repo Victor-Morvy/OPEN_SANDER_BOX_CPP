@@ -53,6 +53,44 @@ void GuidanceModule::engageFlch(const FlyByWire::AircraftState& st, FlyByWire& f
     mode.vert = VertMode::Flch;
 }
 
+void GuidanceModule::engageApproach(const FlyByWire::AircraftState& st, FlyByWire& fbw)
+{
+    // Acopla LOC (lateral) + GS (vertical) num único botão — simplificação
+    // do par arm/capture real (LOC captura primeiro, GS arma depois). Aqui
+    // os dois eixos ficam "armados" (asas niveladas / pitch parado) até
+    // ils.valid virar true, então passam a seguir locDevDeg/gsDevDeg.
+    targets.bankDeg  = st.rollDeg;
+    targets.pitchDeg = st.pitchDeg;
+    _pitchInteg      = 0.f;
+    _vsInteg         = st.pitchDeg;
+    _columnFilt      = 0.f;
+    fbw.setTargetBank(targets.bankDeg);
+    mode.lat  = LatMode::Approach;
+    mode.vert = VertMode::Approach;
+}
+
+void GuidanceModule::engageVnav(const FlyByWire::AircraftState& st, FlyByWire& fbw)
+{
+    (void)fbw;   // VNAV só atua no eixo vertical — lateral fica com quem já estiver selecionado
+    vnavTargetWpt = -1;
+    for (int i = std::max(activeWpt, 0); i < (int)fplan.size(); ++i)
+        if (fplan[i].hasAlt) { vnavTargetWpt = i; break; }
+    if (vnavTargetWpt < 0) return;   // nenhum waypoint com restrição à frente — não engaja
+
+    targets.pitchDeg = st.pitchDeg;
+    _pitchInteg       = 0.f;
+    _vsInteg          = st.pitchDeg;
+    _columnFilt       = 0.f;
+    mode.vert = VertMode::Vnav;
+}
+
+void GuidanceModule::engageAP(const FlyByWire::AircraftState& st, FlyByWire& fbw)
+{
+    if (!isEngaged())        // nenhum modo selecionado: cai no básico (ROLL+FPA)
+        engageAttitude(st, fbw);
+    apCoupled = true;
+}
+
 void GuidanceModule::engageSpeed(const FlyByWire::AircraftState& st, float currentThrottle)
 {
     targets.speedKt  = st.casKt;
@@ -66,11 +104,12 @@ void GuidanceModule::engageSpeed(const FlyByWire::AircraftState& st, float curre
 
 void GuidanceModule::disengageVert()
 {
-    mode.vert    = VertMode::Off;
-    _pitchInteg  = 0.f;
-    _vsInteg     = 0.f;
-    _flchInteg   = 0.f;
-    _flchThrTrim = 0.f;
+    mode.vert     = VertMode::Off;
+    vnavTargetWpt = -1;
+    _pitchInteg   = 0.f;
+    _vsInteg      = 0.f;
+    _flchInteg    = 0.f;
+    _flchThrTrim  = 0.f;
 }
 
 void GuidanceModule::disengageLat()
@@ -100,10 +139,26 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
 {
     out = {};
 
-    // ── Auto-desconexão por intervenção do piloto (vert + lat) ───────────────
+    // ── Transferência bump-free do servo de pitch ao acoplar o AP ────────────
+    if (apCoupled && !_prevApCoupled) {
+        _pitchInteg = 0.f;
+        _columnFilt = 0.f;
+    }
+    _prevApCoupled = apCoupled;
+
+    // ── AP acoplado sem nenhum modo selecionado → cai no básico (ROLL+FPA) ───
+    // Mesma regra do avião real: desengajar o único modo ativo não desliga o
+    // AP, ele volta pro modo básico. Cobre tanto quem chamou engageAP() sem
+    // nada selecionado quanto quem desengajou o último modo com AP acoplado.
+    if (apCoupled && mode.lat == LatMode::Off && mode.vert == VertMode::Off)
+        engageAttitude(st, fbw);
+
+    // ── Auto-desconexão por intervenção do piloto ─────────────────────────────
+    // Só desacopla o AP (equivalente ao quick disconnect) — os modos do FD
+    // continuam selecionados/computando, exatamente como no avião real
+    // ("AP DISENGAGE NÃO afeta o FD, só descola dos servos").
     if (std::abs(inp.column) > DISC_THRESH || std::abs(inp.wheel) > DISC_THRESH) {
-        disengageVert();
-        disengageLat();
+        apCoupled = false;
     }
 
     // ── LNAV: bearing ao waypoint ativo → heading target ─────────────────────
@@ -128,28 +183,82 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         }
     }
 
-    // ── Heading Hold: hdg_error → bank_demand → FBW attitude hold ───────────
-    if (mode.lat == LatMode::HeadingHold || mode.lat == LatMode::Nav) {
-        constexpr float KP_HDG = 3.0f;
-        float hdgErr = targets.headingDeg - st.hdgDeg;
-        // normaliza para -180..+180
-        while (hdgErr >  180.f) hdgErr -= 360.f;
-        while (hdgErr < -180.f) hdgErr += 360.f;
-        float bankDemand = std::clamp(KP_HDG * hdgErr, -25.f, 25.f);
-        targets.bankDeg  = bankDemand;
-        fbw.setTargetBank(bankDemand);
-        inp.wheel = 0.f;
+    // ── Heading Hold / LNAV / APP LOC: erro → bank_demand → FBW attitude hold ─
+    if (mode.lat == LatMode::HeadingHold || mode.lat == LatMode::Nav ||
+        mode.lat == LatMode::Approach) {
+        float bankLimit = lowBank ? 15.f : 25.f;
+        float bankDemand;
+        if (mode.lat == LatMode::Approach) {
+            // Armado (sinal fora do cone): nivela as asas até capturar.
+            constexpr float KP_LOC = 3.5f;
+            bankDemand = ils.valid ? std::clamp(KP_LOC * ils.locDevDeg,
+                                                 -bankLimit, bankLimit)
+                                    : 0.f;
+        } else {
+            constexpr float KP_HDG = 3.0f;
+            float hdgErr = targets.headingDeg - st.hdgDeg;
+            // normaliza para -180..+180
+            while (hdgErr >  180.f) hdgErr -= 360.f;
+            while (hdgErr < -180.f) hdgErr += 360.f;
+            bankDemand = std::clamp(KP_HDG * hdgErr, -bankLimit, bankLimit);
+        }
+        targets.bankDeg  = bankDemand;   // sempre atualizado → alimenta fd.bankBar
+        if (apCoupled) {
+            fbw.setTargetBank(bankDemand);
+            inp.wheel = 0.f;
+        }
     }
 
-    // ── Altitude Hold: cascata alt → VS → pitch ───────────────────────────────
-    if (mode.vert == VertMode::AltitudeHold) {
+    // ── Altitude Hold / APP GS / VNAV: cascata alt|GS|path → VS → pitch ──────
+    if (mode.vert == VertMode::AltitudeHold || mode.vert == VertMode::Approach ||
+        mode.vert == VertMode::Vnav) {
         constexpr float KP_ALT      = 1.6f;
         constexpr float KP_VS       = 0.009f;
         constexpr float KI_VS       = 0.0006f; // integrador: elimina erro de regime do VS
         constexpr float PITCH_RATE  = 4.0f;   // °/s
+        constexpr float KP_GS       = 120.f;  // fpm por grau de desvio de glide (suave)
 
         float vsDemand;
-        if (targets.vsManual) {
+        if (mode.vert == VertMode::Approach) {
+            // Armado (sinal fora do cone): mantém nível até capturar.
+            vsDemand = ils.valid ? std::clamp(KP_GS * ils.gsDevDeg, -800.f, 800.f)
+                                  : 0.f;
+        } else if (mode.vert == VertMode::Vnav) {
+            // Recalcula o próximo waypoint com restrição de altitude — o LNAV
+            // pode sequenciar o fplan em paralelo (VNAV não mexe em activeWpt).
+            vnavTargetWpt = -1;
+            for (int i = std::max(activeWpt, 0); i < (int)fplan.size(); ++i)
+                if (fplan[i].hasAlt) { vnavTargetWpt = i; break; }
+
+            if (vnavTargetWpt < 0) {
+                // Sem mais restrição à frente: captura na altitude atual
+                mode.vert     = VertMode::AltitudeHold;
+                targets.altFt = st.altBaro;
+                vsDemand      = 0.f;
+            } else {
+                constexpr double D2R = 3.14159265358979 / 180.0;
+                const Waypoint& w = fplan[vnavTargetWpt];
+                double dNorth = (w.lat - st.latDeg) * 60.0;
+                double dEast  = (w.lon - st.lonDeg) * 60.0 * std::cos(st.latDeg * D2R);
+                float distNm  = (float)std::sqrt(dNorth * dNorth + dEast * dEast);
+                float altErr  = w.altFt - st.altBaro;   // + = precisa subir
+
+                if (distNm < 1.f || std::abs(altErr) < 100.f) {
+                    // Captura: perto do waypoint e/ou da altitude → segue reto
+                    mode.vert     = VertMode::AltitudeHold;
+                    targets.altFt = w.altFt;
+                    vsDemand      = 0.f;
+                } else {
+                    // VS necessário pra bater a restrição na distância restante,
+                    // dado o CAS atual (≈ groundspeed, sem modelo de vento) —
+                    // recalculado todo frame, então se autocorrige sozinho.
+                    float gsKt = std::max(st.casKt, 60.f);
+                    float timeToWptMin = distNm / gsKt * 60.f;
+                    vsDemand = std::clamp(altErr / std::max(timeToWptMin, 0.1f),
+                                          -MAX_VS_FPM, MAX_VS_FPM);
+                }
+            }
+        } else if (targets.vsManual) {
             vsDemand = std::clamp(targets.vsFpm, -MAX_VS_FPM, MAX_VS_FPM);
             float altErr = targets.altFt - st.altBaro;
             if (std::abs(altErr) < 200.f)
@@ -202,7 +311,10 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
             float pMin  = climb ? -4.f : PITCH_DES;   // subindo não pica além de −4
 
             // Speed-on-pitch: rápido → nariz sobe; lento → nariz desce
-            float spdErr = st.casKt - targets.speedKt;   // + = rápido demais
+            // (mesma conversão grosseira Mach→kt do A/THR, ver KT_PER_MACH acima)
+            float spdErr = targets.speedIsMach
+                ? (st.mach - targets.machTarget) * 660.f
+                : (st.casKt - targets.speedKt);   // + = rápido demais
             // Anti-windup por saturação (nunca por magnitude do erro)
             float rawUn = FLCH_KP * spdErr + _flchInteg;
             bool  satHi = rawUn >= pMax, satLo = rawUn <= pMin;
@@ -237,8 +349,10 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         }
     }
 
-    // ── Loop externo de pitch (compartilhado att + alt) ──────────────────────
-    if (mode.vert != VertMode::Off) {
+    // ── Loop externo de pitch — servo do AP (compartilhado att/alt/vnav/app) ──
+    // targets.pitchDeg já foi computado acima (alimenta fd.pitchBar mesmo sem
+    // AP acoplado); só escreve em inp.column se o AP estiver de fato acoplado.
+    if (apCoupled && mode.vert != VertMode::Off) {
         constexpr float KP      = 0.022f;  // reduzido: evita oscilação 1 Hz
         constexpr float KI      = 0.003f;
         constexpr float COL_LP  = 0.70f;   // filtro passa-baixo: α alto = mais suave
@@ -257,7 +371,13 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         constexpr float KP_OVR    = 0.015f;  // P overspeed — mais suave (piso é prioridade)
         constexpr float KI_SPD    = 0.010f;  // I underspeed [throttle/(kt·s)]
         constexpr float STEP_GAIN = 0.018f;  // throttle adicionado por kt de erro a cada 1 s
-        float spdErr = targets.speedKt - st.casKt;
+        // IAS/Mach: converte o erro de Mach pra "kt equivalente" (escala
+        // grosseira, Mach 1 ≈ 660 kt) só pra reaproveitar os mesmos ganhos —
+        // não é uma conversão real de Mach→CAS (que dependeria de temp/alt).
+        constexpr float KT_PER_MACH = 660.f;
+        float spdErr = targets.speedIsMach
+            ? (targets.machTarget - st.mach) * KT_PER_MACH
+            : (targets.speedKt - st.casKt);
 
         // Integrador em unidades de throttle: elimina erro em regime nos DOIS sentidos.
         // Underspeed integra 2× mais rápido (nunca ficar abaixo do alvo é prioridade).
@@ -300,9 +420,11 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
     }
 
     // ── Flight Director ───────────────────────────────────────────────────────
+    // active = algum modo lat/vert SELECIONADO (armado) — independe de
+    // apCoupled. A/THR não tem barra própria, então não entra aqui.
     fd.pitchBar = targets.pitchDeg;
     fd.bankBar  = targets.bankDeg;
-    fd.active   = isEngaged() || athrEngaged();
+    fd.active   = isEngaged();
 
     out.column = inp.column;
     out.wheel  = inp.wheel;

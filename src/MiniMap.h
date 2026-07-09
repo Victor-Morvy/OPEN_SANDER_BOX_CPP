@@ -49,13 +49,20 @@ public:
     void processUploads();
 
     // Desenha o HSD ocupando `size` a partir do cursor da janela ImGui atual.
-    // Scroll sobre o widget altera hsdZoom. `pred` = trajetória prevista
-    // (trend vector — curva que o avião fará nos próximos segundos, calculada
-    // pelo chamador com ground speed + turn rate), desenhada como polilinha.
+    // Scroll sobre o widget altera hsdZoom. Todas as polilinhas (pred/guidance/
+    // route) ganham um halo preto por baixo para ficarem legíveis sobre
+    // qualquer cor de tile.
+    //   pred         = trend vector físico (turn rate atual), verde
+    //   guidancePath = curva que o AP vai voar até capturar o alvo de
+    //                  heading/NAV (simulada pelo chamador com o mesmo ganho
+    //                  do GuidanceModule), amarelo
+    //   route        = plano de voo completo ligando os waypoints, rosa
     void drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                  const std::vector<Poi>* pois = nullptr,
                  const std::vector<Rwy>* rwys = nullptr,
-                 const std::vector<PathPt>* pred = nullptr);
+                 const std::vector<PathPt>* pred = nullptr,
+                 const std::vector<PathPt>* guidancePath = nullptr,
+                 const std::vector<PathPt>* route = nullptr);
 
     // Mapa de seleção. Retorna true no frame em que o usuário clicou
     // (selLat/selLon recebem a posição do clique). Marcador em selLat/selLon,

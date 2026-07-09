@@ -1827,7 +1827,9 @@ int main(){
                 if (gm.mode.lat == GuidanceModule::LatMode::Nav)
                     gm.disengageLat();
             }
-            ImGui::SameLine(200.f);
+            // LNAV mais à direita que a coluna padrão (200): o CLR termina
+            // praticamente em cima dela — 320 dá respiro entre CLR e LNAV
+            ImGui::SameLine(320.f);
             bool navOn = gm.mode.lat == GuidanceModule::LatMode::Nav;
             if (modeBtn(navOn ? "LNAV ON##n" : "LNAV##n", navOn)) {
                 if (navOn)                  gm.disengageLat();

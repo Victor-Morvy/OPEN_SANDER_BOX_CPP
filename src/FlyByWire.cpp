@@ -164,32 +164,26 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             // aproximação sem NENHUMA proteção de arfagem (reportado:
             // avião "se perdeu" — rolou sozinho — em baixa velocidade perto
             // da pista, alpha alto sem nenhum sistema segurando o nariz).
-            // COM HISTERESE (mesma lição do envelope de pitch acima —
-            // liga/desliga exatamente na fronteira fazia o profundor
-            // "brigar"/chattering): engaja ao cruzar ALPHA_PROT, só
-            // desengaja quando o alpha já caiu ALPHA_HYST abaixo do limiar
-            // E a rotação amorteceu — sem isso, a própria correção derrubava
-            // o alpha, desligava, o nariz subia de novo e reengajava sem
-            // parar (reportado: profundor "brigando", -1 quase sempre).
-            // Demanda taxa de arfagem negativa crescendo com o quanto o
-            // alpha passou do limiar; não alimenta o integrador (é
-            // transitório, como o envelope de pitch acima).
+            // RAMPA CONTÍNUA em vez de liga/desliga por limiar: a correção
+            // começa suave ALPHA_SOFT° ANTES de ALPHA_PROT e cresce linear
+            // com o alpha — sem degrau na entrada (era a causa da "briga":
+            // no modelo anterior, o degrau instantâneo ao cruzar o limiar
+            // já entrava demandando várias °/s de uma vez). Por ser contínua
+            // (sem estado on/off), também não precisa de histerese — não há
+            // descontinuidade pra oscilar em cima dela.
             float alphaErr = 0.f;
             {
-                constexpr float ALPHA_HYST     = 0.035f;  // ~2° de folga pra desengajar
-                constexpr float ALPHA_RATE_KP  = 2.0f;    // (°/s) por ° acima do limiar
-                constexpr float ALPHA_MAX_RATE = 5.f;     // taxa máx de recuperação °/s
+                constexpr float ALPHA_SOFT_DEG = 3.0f;   // começa a corrigir 3° antes do limiar
+                constexpr float ALPHA_RATE_KP  = 1.0f;   // (°/s) por ° acima do início da rampa — suave
+                constexpr float ALPHA_MAX_RATE = 4.f;    // taxa máx de recuperação °/s
 
-                if (!_alphaFloor && st.alphaRad > ALPHA_PROT)
-                    _alphaFloor = true;
-                else if (_alphaFloor && st.alphaRad < ALPHA_PROT - ALPHA_HYST
-                                      && std::abs(st.pitchRateDegS) < 1.f)
-                    _alphaFloor = false;
+                float alphaProtDeg = ALPHA_PROT / DEG2RAD;
+                float alphaDeg     = st.alphaRad / DEG2RAD;
+                _alphaFloor = alphaDeg > alphaProtDeg;   // só para status/HUD
 
-                if (_alphaFloor) {
-                    float excessDeg = (st.alphaRad - (ALPHA_PROT - ALPHA_HYST)) / DEG2RAD;
-                    float qDem = -std::clamp(ALPHA_RATE_KP * std::max(excessDeg, 0.f),
-                                             0.f, ALPHA_MAX_RATE);
+                float excessDeg = alphaDeg - (alphaProtDeg - ALPHA_SOFT_DEG);
+                if (excessDeg > 0.f) {
+                    float qDem = -std::clamp(ALPHA_RATE_KP * excessDeg, 0.f, ALPHA_MAX_RATE);
                     alphaErr = gains.cstarK * (qDem - st.pitchRateDegS) * DEG2RAD;
                 }
             }

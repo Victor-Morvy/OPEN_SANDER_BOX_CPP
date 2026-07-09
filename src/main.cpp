@@ -927,6 +927,7 @@ int main(){
             gm.ils.valid     = ilsArmed && ilsArmedApp.valid;
             gm.ils.locDevDeg = ilsArmedApp.locDevDeg;
             gm.ils.gsDevDeg  = ilsArmedApp.gsDevDeg;
+            gm.ils.courseDeg = ilsArmedApp.courseDeg;
             gm.update((float)dt, acSt, inp, fbw, gmOut);
             if (gmOut.overrideThrottle) {
                 inp.throttle[0] = gmOut.throttle[0];

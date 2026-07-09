@@ -360,7 +360,12 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
     dl->AddRectFilled(p0, p1, IM_COL32(12, 16, 20, 235), 6.f);
 
     double ctx, cty; ll2tile(lat, lon, hsdZoom, ctx, cty);
-    drawTiles(dl, center, ctx, cty, hsdZoom, p0, p1, rot);
+    if (hsdShowTiles)
+        drawTiles(dl, center, ctx, cty, hsdZoom, p0, p1, rot);
+    // hsdShowTiles=false: sem dado vetorial de land/water no pipeline (só
+    // busca tiles raster), então o "fundo liso" acima já É o fallback —
+    // deixa a espinha de peixe/pistas/waypoints (brancos) bem mais legíveis
+    // sem a textura do mapa por baixo.
 
     // overlays de navegação (posições giram com o mapa; textos ficam retos)
     {
@@ -430,8 +435,28 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
 
     drawAircraftIcon(dl, center, 0.f, 10.f, IM_COL32(255, 255, 255, 255));
 
-    dl->AddText(ImVec2(p1.x - 96.f, p1.y - 20.f),
-                IM_COL32(255, 255, 255, 130), "\xC2\xA9 OpenStreetMap");
+    if (hsdShowTiles)
+        dl->AddText(ImVec2(p1.x - 96.f, p1.y - 20.f),
+                    IM_COL32(255, 255, 255, 130), "\xC2\xA9 OpenStreetMap");
+
+    // Botão MAPA/LISO: esconde os tiles OSM, deixando só o fundo liso —
+    // separa melhor o branco da espinha de peixe/pistas/waypoints do resto.
+    {
+        const char* lbl = hsdShowTiles ? "MAPA" : "LISO";
+        ImVec2 bp0{p0.x + 4.f, p0.y + 4.f};
+        ImVec2 bts = ImGui::CalcTextSize(lbl);
+        ImVec2 bp1{bp0.x + bts.x + 10.f, bp0.y + bts.y + 6.f};
+        ImGuiIO& io = ImGui::GetIO();
+        bool hov = io.MousePos.x >= bp0.x && io.MousePos.x <= bp1.x &&
+                   io.MousePos.y >= bp0.y && io.MousePos.y <= bp1.y;
+        if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            hsdShowTiles = !hsdShowTiles;
+        dl->AddRectFilled(bp0, bp1,
+                          hov ? IM_COL32(60, 65, 75, 230) : IM_COL32(25, 28, 34, 210), 3.f);
+        dl->AddRect(bp0, bp1, IM_COL32(255, 255, 255, 90), 3.f);
+        dl->AddText({bp0.x + 5.f, bp0.y + 3.f}, IM_COL32(230, 230, 230, 255), lbl);
+    }
+
     dl->PopClipRect();
     dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 70), 6.f, 0, 1.5f);
 }
@@ -486,6 +511,17 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
 
     Xform xf{center, ctx, cty, _pZoom, 1.f, 0.f};
 
+    // Botão MAPA/LISO (mesma ideia do HSD) — calculado ANTES do clique de
+    // destino pra esse clique não "vazar" pro mapa por baixo do botão.
+    const char* tileBtnLbl = pickerShowTiles ? "MAPA" : "LISO";
+    ImVec2 tbp0{p0.x + 4.f, p0.y + 4.f};
+    ImVec2 tbts = ImGui::CalcTextSize(tileBtnLbl);
+    ImVec2 tbp1{tbp0.x + tbts.x + 10.f, tbp0.y + tbts.y + 6.f};
+    bool tileBtnHov = io.MousePos.x >= tbp0.x && io.MousePos.x <= tbp1.x &&
+                      io.MousePos.y >= tbp0.y && io.MousePos.y <= tbp1.y;
+    if (tileBtnHov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        pickerShowTiles = !pickerShowTiles;
+
     // cabeceira de pista sob o cursor (raio de 14 px) → alvo de decolagem
     const Rwy* candRwy = nullptr;
     bool candLE = true;
@@ -502,11 +538,14 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
         }
     }
 
-    // clique (soltar sem ter arrastado) → define o destino
+    // clique (soltar sem ter arrastado) → define o destino (ignora clique
+    // que começou em cima do botão MAPA/LISO)
     if (ImGui::IsItemDeactivated()) {
         float dx = io.MousePos.x - io.MouseClickedPos[0].x;
         float dy = io.MousePos.y - io.MouseClickedPos[0].y;
-        if (dx * dx + dy * dy < 25.f && hovered) {
+        bool startedOnTileBtn = io.MouseClickedPos[0].x >= tbp0.x && io.MouseClickedPos[0].x <= tbp1.x &&
+                               io.MouseClickedPos[0].y >= tbp0.y && io.MouseClickedPos[0].y <= tbp1.y;
+        if (dx * dx + dy * dy < 25.f && hovered && !startedOnTileBtn) {
             if (candRwy && rwyPick) {
                 // gruda na cabeceira: posição + proa de decolagem
                 const Rwy& r = *candRwy;
@@ -532,7 +571,8 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(p0, p1, true);
     dl->AddRectFilled(p0, p1, IM_COL32(12, 16, 20, 255), 4.f);
-    drawTiles(dl, center, ctx, cty, _pZoom, p0, p1, 0.f);
+    if (pickerShowTiles)
+        drawTiles(dl, center, ctx, cty, _pZoom, p0, p1, 0.f);
 
     double mpp = metersPerPixel(_pLat, _pZoom);
 
@@ -585,9 +625,17 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
         if (barM >= 1000.0) snprintf(buf, sizeof(buf), "100 px = %.1f km", barM / 1000.0);
         else                snprintf(buf, sizeof(buf), "100 px = %.0f m", barM);
         dl->AddText(ImVec2(p0.x + 6.f, p1.y - 20.f), IM_COL32(255, 255, 255, 200), buf);
-        dl->AddText(ImVec2(p1.x - 96.f, p1.y - 20.f),
-                    IM_COL32(255, 255, 255, 140), "\xC2\xA9 OpenStreetMap");
+        if (pickerShowTiles)
+            dl->AddText(ImVec2(p1.x - 96.f, p1.y - 20.f),
+                        IM_COL32(255, 255, 255, 140), "\xC2\xA9 OpenStreetMap");
     }
+
+    // Botão MAPA/LISO — desenhado por cima de tudo (hit-test já calculado
+    // antes do clique de destino, ver tbp0/tbp1 acima)
+    dl->AddRectFilled(tbp0, tbp1,
+                      tileBtnHov ? IM_COL32(60, 65, 75, 230) : IM_COL32(25, 28, 34, 210), 3.f);
+    dl->AddRect(tbp0, tbp1, IM_COL32(255, 255, 255, 90), 3.f);
+    dl->AddText({tbp0.x + 5.f, tbp0.y + 3.f}, IM_COL32(230, 230, 230, 255), tileBtnLbl);
 
     dl->PopClipRect();
     dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 60), 4.f);

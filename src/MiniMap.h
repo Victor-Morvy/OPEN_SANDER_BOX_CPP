@@ -82,7 +82,14 @@ public:
 
     void cleanup();
 
-    int hsdZoom = 12;   // 5..16 (scroll)
+    int  hsdZoom      = 12;    // 5..16 (scroll)
+    // Botão no canto do HSD alterna: tiles OSM completos ↔ fundo liso (sem
+    // land/water real — o pipeline só busca tiles raster, sem dado vetorial
+    // de terra/água — mas separa bem o branco da espinha de peixe/pistas/
+    // waypoints do resto do mapa, que era o pedido quando não dá pra ter
+    // land/water de verdade).
+    bool hsdShowTiles    = true;
+    bool pickerShowTiles = true;   // mesmo botão, independente, no mapa do menu de pausa
 
 private:
     struct Key {

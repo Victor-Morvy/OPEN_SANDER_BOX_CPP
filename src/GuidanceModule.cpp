@@ -187,15 +187,32 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
     if (mode.lat == LatMode::HeadingHold || mode.lat == LatMode::Nav ||
         mode.lat == LatMode::Approach) {
         float bankLimit = lowBank ? 15.f : 25.f;
+        constexpr float KP_HDG = 3.0f;
         float bankDemand;
         if (mode.lat == LatMode::Approach) {
             // Armado (sinal fora do cone): nivela as asas até capturar.
-            constexpr float KP_LOC = 3.5f;
-            bankDemand = ils.valid ? std::clamp(KP_LOC * ils.locDevDeg,
-                                                 -bankLimit, bankLimit)
-                                    : 0.f;
+            // Capturado: NÃO comanda bank direto por locDevDeg (isso satura
+            // no bank máx pra qualquer desvio grande e pode estourar/orbitar
+            // em vez de convergir — reportado: avião assentava numa proa bem
+            // longe do curso, ex. curso 308° virava ~247°). Em vez disso,
+            // computa uma PROA de interceptação (curso + ângulo proporcional
+            // ao desvio, capado em 45°) e usa a MESMA lei de erro de proa do
+            // HDG — o ângulo de intercept encolhe pra 0 conforme o desvio
+            // some, convergindo suave até alinhar com o curso.
+            constexpr float KP_INTERCEPT   = 4.0f;
+            constexpr float MAX_INTERCEPT  = 45.f;
+            if (ils.valid) {
+                float interceptDeg = std::clamp(KP_INTERCEPT * ils.locDevDeg,
+                                                -MAX_INTERCEPT, MAX_INTERCEPT);
+                float desiredHdg = ils.courseDeg + interceptDeg;
+                float hdgErr = desiredHdg - st.hdgDeg;
+                while (hdgErr >  180.f) hdgErr -= 360.f;
+                while (hdgErr < -180.f) hdgErr += 360.f;
+                bankDemand = std::clamp(KP_HDG * hdgErr, -bankLimit, bankLimit);
+            } else {
+                bankDemand = 0.f;
+            }
         } else {
-            constexpr float KP_HDG = 3.0f;
             float hdgErr = targets.headingDeg - st.hdgDeg;
             // normaliza para -180..+180
             while (hdgErr >  180.f) hdgErr -= 360.f;

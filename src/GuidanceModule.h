@@ -49,6 +49,7 @@ public:
         bool  valid     = false;
         float locDevDeg = 0.f;   // + = voar PARA A DIREITA
         float gsDevDeg  = 0.f;   // + = voar PARA CIMA (abaixo do glide)
+        float courseDeg = 0.f;   // proa de pouso (true) — necessário pro intercept de LOC
     } ils;
 
     // Targets editáveis pelo painel a qualquer momento

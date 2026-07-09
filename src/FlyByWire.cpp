@@ -156,8 +156,45 @@ void FlyByWire::update(float dt, const PilotInput& inp,
             _initialized  = false;  // reinicializa quando decolar
             _envActive    = 0;
         } else {
-            _cstarDem = _cstarAct + (columnMod + spdStab) * gains.maxDemand + envErr;
-            _alphaFloor = false;
+            // Alpha floor — proteção de estol. Diferente do spdStab (soft,
+            // desligado em config de pouso porque voo lento ali é
+            // intencional), esta é uma proteção DURA: fica sempre ativa,
+            // mesmo com trem/flap de pouso e mesmo com stick puxado —
+            // sem ela, a aeronave podia perder velocidade em final de
+            // aproximação sem NENHUMA proteção de arfagem (reportado:
+            // avião "se perdeu" — rolou sozinho — em baixa velocidade perto
+            // da pista, alpha alto sem nenhum sistema segurando o nariz).
+            // COM HISTERESE (mesma lição do envelope de pitch acima —
+            // liga/desliga exatamente na fronteira fazia o profundor
+            // "brigar"/chattering): engaja ao cruzar ALPHA_PROT, só
+            // desengaja quando o alpha já caiu ALPHA_HYST abaixo do limiar
+            // E a rotação amorteceu — sem isso, a própria correção derrubava
+            // o alpha, desligava, o nariz subia de novo e reengajava sem
+            // parar (reportado: profundor "brigando", -1 quase sempre).
+            // Demanda taxa de arfagem negativa crescendo com o quanto o
+            // alpha passou do limiar; não alimenta o integrador (é
+            // transitório, como o envelope de pitch acima).
+            float alphaErr = 0.f;
+            {
+                constexpr float ALPHA_HYST     = 0.035f;  // ~2° de folga pra desengajar
+                constexpr float ALPHA_RATE_KP  = 2.0f;    // (°/s) por ° acima do limiar
+                constexpr float ALPHA_MAX_RATE = 5.f;     // taxa máx de recuperação °/s
+
+                if (!_alphaFloor && st.alphaRad > ALPHA_PROT)
+                    _alphaFloor = true;
+                else if (_alphaFloor && st.alphaRad < ALPHA_PROT - ALPHA_HYST
+                                      && std::abs(st.pitchRateDegS) < 1.f)
+                    _alphaFloor = false;
+
+                if (_alphaFloor) {
+                    float excessDeg = (st.alphaRad - (ALPHA_PROT - ALPHA_HYST)) / DEG2RAD;
+                    float qDem = -std::clamp(ALPHA_RATE_KP * std::max(excessDeg, 0.f),
+                                             0.f, ALPHA_MAX_RATE);
+                    alphaErr = gains.cstarK * (qDem - st.pitchRateDegS) * DEG2RAD;
+                }
+            }
+
+            _cstarDem = _cstarAct + (columnMod + spdStab) * gains.maxDemand + envErr + alphaErr;
 
             // err (P/D) inclui envelope + speed-stab — proteções transitórias
             // que zeram sozinhas quando o estado volta pro envelope.

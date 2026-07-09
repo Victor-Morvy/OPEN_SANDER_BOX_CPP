@@ -1479,7 +1479,7 @@ int main(){
                 ImGuiWindowFlags_NoScrollbar| ImGuiWindowFlags_NoScrollWithMouse |
                 ImGuiWindowFlags_NoBackground);
             // Trend vector: integra ground speed (vetor vN/vE do JSBSim) +
-            // taxa de proa ψ̇ por 5 s (passos de 0.25 s) — a curva que o
+            // taxa de proa ψ̇ por 30 s (passos de 0.25 s) — a curva que o
             // avião fará mantendo a curva atual.
             static std::vector<MiniMap::PathPt> predPath;
             predPath.clear();
@@ -1492,7 +1492,7 @@ int main(){
                     double w    = predPsiDotDegS / RAD2DEG;       // rad/s
                     double px = wpos.x, pz = wpos.z;
                     constexpr double PDT = 0.25;
-                    for (double t = 0.0; t <= 5.0 + 1e-6; t += PDT) {
+                    for (double t = 0.0; t <= 30.0 + 1e-6; t += PDT) {
                         MiniMap::PathPt pp;
                         geo::toLatLon(px, pz, ORIGIN_LAT, ORIGIN_LON,
                                       pp.lat, pp.lon);

@@ -1828,8 +1828,9 @@ int main(){
                     gm.disengageLat();
             }
             // LNAV mais à direita que a coluna padrão (200): o CLR termina
-            // praticamente em cima dela — 320 dá respiro entre CLR e LNAV
-            ImGui::SameLine(320.f);
+            // praticamente em cima dela — 280 dá respiro entre CLR e LNAV
+            // (320 ficou longe demais; calibrado visualmente pelo Victor)
+            ImGui::SameLine(280.f);
             bool navOn = gm.mode.lat == GuidanceModule::LatMode::Nav;
             if (modeBtn(navOn ? "LNAV ON##n" : "LNAV##n", navOn)) {
                 if (navOn)                  gm.disengageLat();

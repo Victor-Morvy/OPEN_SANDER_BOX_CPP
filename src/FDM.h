@@ -25,6 +25,7 @@ struct Telemetry {
     double rpm      = 0;   // C172P
     double n1[2]    = {};  // E195 — N1 por motor [%]
     double n2[2]    = {};  // E195 — N2 por motor [%]
+    double fuelKg[2]= {};  // E195 — combustível por asa [kg] (tank 0=esq, 1=dir)
     double flapPos  = 0;   // 0..1
     double gearPos  = 1;   // 0..1
     double loadNz   = 1;   // fator de carga [g]

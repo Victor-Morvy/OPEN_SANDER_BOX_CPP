@@ -22,6 +22,8 @@ struct Data {
     float      gearPos  = 1.f;    // 0=recolhido, 1=baixado (posição animada)
     bool       reverser = false;  // reversor DEPLOYADO (estado real pós-FBW)
     float      throttle = 0.f;    // manete comandada 0..1 (cmd efetivo FADEC)
+    float      fuelKgL  = 0.f;    // combustível asa esquerda [kg]
+    float      fuelKgR  = 0.f;    // combustível asa direita  [kg]
 
     // ── ILS sintético ──
     // Cruzeta de desvio (approach mais alinhado no yaw / armado):

@@ -340,12 +340,12 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
     }
 
     // ── Bloco de status (canto inferior direito do combiner) ────────────────
-    // RALT | GEAR UP/DOWN | REV (se deployado) | THR %
+    // RALT | GEAR UP/DOWN | REV (se deployado) | THR % | FUEL por asa
     {
-        char buf[24];
+        char buf[40];
         float lineH = FS + 4.f;
         float x1 = clipMax.x - 6.f;
-        float y  = clipMax.y - 6.f - lineH * 4.f;
+        float y  = clipMax.y - 6.f - lineH * 5.f;
         auto textR = [&](ImU32 col, const char* s){
             ImVec2 ts = hudTextSize(s);
             hudText(dl, {x1 - ts.x, y}, col, s);
@@ -363,6 +363,11 @@ void draw(const glm::mat4& view, const glm::mat4& proj,
         else            y += lineH;   // mantém o bloco estável sem o REV
 
         snprintf(buf, sizeof(buf), "THR %d%%", (int)lroundf(d.throttle * 100.f));
+        textR(HUD_COL, buf);
+
+        // Combustível por asa (kg) — logo abaixo do THR
+        snprintf(buf, sizeof(buf), "FUEL L%d R%d KG",
+                 (int)lroundf(d.fuelKgL), (int)lroundf(d.fuelKgR));
         textR(HUD_COL, buf);
     }
 

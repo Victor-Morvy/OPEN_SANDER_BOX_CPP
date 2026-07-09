@@ -1153,6 +1153,8 @@ int main(){
             hd.gearPos  = gearAnimPos;
             hd.reverser = surfCmd.reverser;
             hd.throttle = (float)tel.throttle;
+            hd.fuelKgL  = (float)tel.fuelKg[0];
+            hd.fuelKgR  = (float)tel.fuelKg[1];
 
             // ILS: cruzeta = mais alinhado no yaw; linhas 3D = até 2 approaches
             if (ilsPfd >= 0) {

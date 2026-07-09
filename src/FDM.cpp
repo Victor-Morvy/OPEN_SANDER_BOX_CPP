@@ -399,6 +399,9 @@ Telemetry FDM::getTelemetry() const
             t.n1[i] = turb ? turb->GetN1() : 0.0;
             t.n2[i] = turb ? turb->GetN2() : 0.0;
         }
+        // Tanques de asa (0=esq, 1=dir) — contents-lbs → kg
+        t.fuelKg[0] = getD("propulsion/tank[0]/contents-lbs") * 0.45359237;
+        t.fuelKg[1] = getD("propulsion/tank[1]/contents-lbs") * 0.45359237;
     } else {
         t.gearPos  = getD("gear/gear-pos-norm");
         t.throttle = getD("fcs/throttle-cmd-norm[0]");

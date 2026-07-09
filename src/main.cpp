@@ -1281,8 +1281,14 @@ int main(){
                     (gm.targets.altFt > tel.altBaro) ? "CLB" : "DES",
                     gm.targets.altFt, gm.targets.speedKt);
             } else if (vm == GuidanceModule::VertMode::Approach) {
-                ImGui::TextColored({.9f,.5f,1.f,1.f},
-                    "%s APP  %s", apPfx, gm.ils.valid ? "GS capturado" : "armado");
+                if (gm.ils.valid)
+                    ImGui::TextColored({.9f,.5f,1.f,1.f},
+                        "%s APP  GS%+.2f\xC2\xB0  PCH%+.1f\xC2\xB0  %.1fNM",
+                        apPfx, gm.ils.gsDevDeg, gm.targets.pitchDeg, ilsArmedApp.distNm);
+                else
+                    ImGui::TextColored({.9f,.5f,1.f,1.f},
+                        "%s APP  armado (along%.0fm dist%.1fNM)",
+                        apPfx, ilsArmedApp.alongM, ilsArmedApp.distNm);
             } else {
                 ImGui::TextColored({.5f,.5f,.5f,1.f},
                     "AP OFF   Z=ATT  H=ALT  F1=AFCS");

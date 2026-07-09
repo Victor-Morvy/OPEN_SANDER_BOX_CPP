@@ -216,12 +216,19 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         constexpr float KP_VS       = 0.009f;
         constexpr float KI_VS       = 0.0006f; // integrador: elimina erro de regime do VS
         constexpr float PITCH_RATE  = 4.0f;   // °/s
-        constexpr float KP_GS       = 120.f;  // fpm por grau de desvio de glide (suave)
+        constexpr float KP_GS       = 120.f;   // fpm por grau de desvio — só a CORREÇÃO
+        constexpr float TAN_3DEG    = 0.05241f;
 
         float vsDemand;
         if (mode.vert == VertMode::Approach) {
             // Armado (sinal fora do cone): mantém nível até capturar.
-            vsDemand = ils.valid ? std::clamp(KP_GS * ils.gsDevDeg, -800.f, 800.f)
+            // Capturado: baseline = taxa de descida que a rampa de 3° exige
+            // NA VELOCIDADE ATUAL (kt → ft/min: ×101.3), mais a correção
+            // proporcional ao desvio. Sem o baseline, desvio pequeno (already
+            // tracking) demandava VS≈0 — nivelava em vez de descer a rampa.
+            float baselineVsFpm = -st.casKt * 101.3f * TAN_3DEG;
+            vsDemand = ils.valid ? std::clamp(baselineVsFpm + KP_GS * ils.gsDevDeg,
+                                              -1200.f, 600.f)
                                   : 0.f;
         } else if (mode.vert == VertMode::Vnav) {
             // Recalcula o próximo waypoint com restrição de altitude — o LNAV

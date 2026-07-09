@@ -964,64 +964,21 @@ int main(){
             glBufferSubData(GL_ARRAY_BUFFER,0,(GLsizeiptr)(ptData.size()*sizeof(float)),ptData.data());
         }
 
-        // ── ILS sintético: armado + candidatos automáticos por alinhamento ────
+        // ── ILS sintético: SÓ o approach armado no menu de pausa (P) ──────────
+        // (auto-tuning por alinhamento removido a pedido do Victor — sem
+        // approach armado, nada de ILS na tela)
         ilsNDisp = 0; ilsPfd = -1;
-        if (fdmOk) {
+        if (fdmOk && ilsArmed) {
             float hdgDeg = (float)fmod(tel.yaw * RAD2DEG + 360.0, 360.0);
-            if (ilsArmed) {
-                computeApproachDevs(ilsArmedApp, wpos.x, wpos.z, acMslM, hdgDeg);
-                // Armado: gate relaxado — vale sempre que estiver do lado da
-                // aproximação, mesmo desalinhado (o piloto ainda vai interceptar)
-                ilsArmedApp.valid = ilsArmedApp.alongM > 100.f
-                                 && ilsArmedApp.distNm < 40.f;
-                if (ilsArmedApp.valid) ilsDisp[ilsNDisp++] = ilsArmedApp;
+            computeApproachDevs(ilsArmedApp, wpos.x, wpos.z, acMslM, hdgDeg);
+            // Gate relaxado — vale sempre que estiver do lado da aproximação,
+            // mesmo desalinhado (o piloto ainda vai interceptar)
+            ilsArmedApp.valid = ilsArmedApp.alongM > 100.f
+                             && ilsArmedApp.distNm < 40.f;
+            if (ilsArmedApp.valid) {
+                ilsDisp[ilsNDisp++] = ilsArmedApp;
+                ilsPfd = 0;
             }
-            // Autos: as duas cabeceiras de cada pista num raio de 25 NM,
-            // filtradas por alinhamento (computeApproachDevs.valid)
-            static std::vector<AirportManager::RwySeg> ilsRs;
-            airports.getRunwaysNear(acWorld, 46300.f, ilsRs);
-            AppCand best[2]; int nBest = 0;
-            for (const auto& r : ilsRs) {
-                double leX, leZ, heX, heZ;
-                geo::toWorld(r.leLat, r.leLon, ORIGIN_LAT, ORIGIN_LON, leX, leZ);
-                geo::toWorld(r.heLat, r.heLon, ORIGIN_LAT, ORIGIN_LON, heX, heZ);
-                float elevLe = r.leElevM != 0.f ? r.leElevM : r.apElevM;
-                float elevHe = r.heElevM != 0.f ? r.heElevM : r.apElevM;
-                for (int e = 0; e < 2; ++e) {
-                    AppCand c;
-                    if (e == 0) {       // pousando NA cabeceira LE (rumo LE→HE)
-                        c.thrX = leX; c.thrZ = leZ; c.thrElevM = elevLe;
-                        c.courseDeg = (float)fmod(
-                            atan2(heX - leX, -(heZ - leZ)) * RAD2DEG + 360.0, 360.0);
-                        c.label = r.apIdent + " " + r.leIdent;
-                    } else {            // pousando NA cabeceira HE (rumo HE→LE)
-                        c.thrX = heX; c.thrZ = heZ; c.thrElevM = elevHe;
-                        c.courseDeg = (float)fmod(
-                            atan2(leX - heX, -(leZ - heZ)) * RAD2DEG + 360.0, 360.0);
-                        c.label = r.apIdent + " " + r.heIdent;
-                    }
-                    computeApproachDevs(c, wpos.x, wpos.z, acMslM, hdgDeg);
-                    if (!c.valid) continue;
-                    if (ilsArmed && ilsArmedApp.valid && c.label == ilsArmedApp.label)
-                        continue;   // já exibido como armado
-                    // Mantém os 2 mais alinhados (insertion sort de 2)
-                    if (nBest < 2) {
-                        best[nBest++] = c;
-                        if (nBest == 2 && best[1].courseDiff < best[0].courseDiff)
-                            std::swap(best[0], best[1]);
-                    } else if (c.courseDiff < best[1].courseDiff) {
-                        best[1] = c;
-                        if (best[1].courseDiff < best[0].courseDiff)
-                            std::swap(best[0], best[1]);
-                    }
-                }
-            }
-            for (int i = 0; i < nBest && ilsNDisp < 2; ++i)
-                ilsDisp[ilsNDisp++] = best[i];
-            // PFD: entre os exibidos, o mais alinhado no eixo do yaw
-            for (int i = 0; i < ilsNDisp; ++i)
-                if (ilsPfd < 0 || ilsDisp[i].courseDiff < ilsDisp[ilsPfd].courseDiff)
-                    ilsPfd = i;
         }
 
         // ── Render ─────────────────────────────────────────────────────────────

@@ -1535,27 +1535,31 @@ int main(){
             ImGui::SetNextItemWidth(390.f);
             ImGui::InputDouble("##lon", &repoParams.lonDeg, 0.0, 0.0, "%.6f");
 
+            // Altitude + Heading em 2 colunas: RÓTULOS numa linha, CAMPOS na
+            // linha seguinte, mesmas posições X. (Antes o SameLine vinha
+            // depois do input — o rótulo do Heading caía à direita do CAMPO
+            // da altitude e o campo do heading descia sozinho, desalinhado.)
             ImGui::Text("Altitude (ft MSL)");
+            ImGui::SameLine(205.f);
+            ImGui::Text("Heading (graus)");
             ImGui::SetNextItemWidth(185.f);
             ImGui::InputDouble("##alt", &repoParams.altFt, 0.0, 0.0, "%.0f");
-
-            ImGui::SameLine(0.f, 20.f);
-
-            ImGui::Text("Heading (graus)");
+            ImGui::SameLine(205.f);
             ImGui::SetNextItemWidth(185.f);
             ImGui::InputDouble("##hdg", &repoParams.headingDeg, 0.0, 0.0, "%.1f");
 
+            // CAS + Pitch + Roll em 3 colunas, mesmo esquema
             ImGui::Text("CAS (kt)");
+            ImGui::SameLine(140.f);
+            ImGui::Text("Pitch (graus)");
+            ImGui::SameLine(266.f);
+            ImGui::Text("Roll (graus)");
             ImGui::SetNextItemWidth(120.f);
             ImGui::InputFloat("##cas", &repoParams.speedKcas, 0.f, 0.f, "%.0f");
-
-            ImGui::SameLine(0.f, 16.f);
-            ImGui::Text("Pitch (graus)");
+            ImGui::SameLine(140.f);
             ImGui::SetNextItemWidth(110.f);
             ImGui::InputFloat("##pch", &repoParams.pitchDeg, 0.f, 0.f, "%.1f");
-
-            ImGui::SameLine(0.f, 16.f);
-            ImGui::Text("Roll (graus)");
+            ImGui::SameLine(266.f);
             ImGui::SetNextItemWidth(110.f);
             ImGui::InputFloat("##rol", &repoParams.rollDeg,  0.f, 0.f, "%.1f");
 

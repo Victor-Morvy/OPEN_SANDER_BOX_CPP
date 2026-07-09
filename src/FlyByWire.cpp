@@ -310,10 +310,17 @@ void FlyByWire::update(float dt, const PilotInput& inp,
         out.spoilerL = clamp01(mfsL + sbk);
         out.spoilerR = clamp01(mfsR + sbk);
 
-        // Ground spoilers: auto-deploy no toque com motores em idle; zero em voo
+        // Ground spoilers: auto-deploy no toque com motores em idle OU com
+        // reversor deployado — reverso não é empuxo pra frente; a manete a
+        // 50% do auto-reverso derrubava a condição de idle e RECOLHIA os
+        // spoilers exatamente na hora que mais precisam estar abertos.
+        // Com eles, os MFS laterais (speedbrake) também abrem full — painéis
+        // todos em cima matando sustentação no rollout, como no real.
         if (st.wow) {
-            bool armed = (inp.throttle[0] < 0.05f && inp.throttle[1] < 0.05f);
+            bool armed = (inp.throttle[0] < 0.05f && inp.throttle[1] < 0.05f)
+                       || out.reverser;
             out.groundSpoiler = armed ? 1.f : 0.f;
+            if (armed) out.spoilerL = out.spoilerR = 1.f;
         } else {
             out.groundSpoiler = 0.f;
         }

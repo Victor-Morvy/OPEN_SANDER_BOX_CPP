@@ -213,7 +213,7 @@ struct Axes {
     bool gear=false;
     bool pauseBtn=false;
     bool apBtn=false;     // Select — Attitude Hold
-    bool altBtn=false;    // Circle/B  — Altitude Hold
+    bool altBtn=false;    // sem binding no joystick — Circle/B é só câmera (H no teclado ainda funciona)
     bool reverser=false;
     // ── Câmera orbital (ângulos persistentes; L2+R2 para ajustar)
     float camYaw   = 0.f;    // 0=atrás, π=nariz; persiste ao soltar gatilhos
@@ -331,10 +331,12 @@ static bool readJoystick(Axes& a, float dt){
         if(B(13)) a.trimAil  = std::max(-1.f, a.trimAil  - JT*dt); // ← = roll esq
         if(B(11)) a.trimAil  = std::min( 1.f, a.trimAil  + JT*dt); // → = roll dir
 
-        // ── Start = pausa | Select = ATT | Circle/B = ALT ────────────────────
+        // ── Start = pausa | Select = ATT ──────────────────────────────────────
+        // Circle/B (B(1)) NÃO aciona mais Altitude Hold — ficava no mesmo
+        // botão do ciclo de câmera, e trocar de câmera em voo desengajava o
+        // AP sem querer. H no teclado continua funcionando normalmente.
         a.pauseBtn = B(7);
         a.apBtn    = B(6);
-        a.altBtn   = B(1);
 
         // ── Y/△ = reversor (toggle; só deploya no solo — gate no FBW) ────────
         static bool prevRev = false;

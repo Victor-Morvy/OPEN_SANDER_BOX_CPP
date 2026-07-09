@@ -1668,7 +1668,7 @@ int main(){
                 }
                 ImVec2 avail = ImGui::GetContentRegionAvail();
                 MiniMap::RwyPick rwyPick;
-                minimap.drawPicker({avail.x, avail.y - 48.f},
+                bool mapClicked = minimap.drawPicker({avail.x, avail.y - 48.f},
                                    repoParams.latDeg, repoParams.lonDeg,
                                    fdm.getLatDeg(), fdm.getLonDeg(),
                                    (float)fdm.getHdgDeg(), &mapPois,
@@ -1681,6 +1681,12 @@ int main(){
                     repoParams.pitchDeg   = 0.f;
                     repoParams.rollDeg    = 0.f;
                     lastRwyPick           = rwyPick;   // persiste p/ armar ILS
+                } else if (mapClicked) {
+                    // clique FORA de cabeceira = teleporte em voo: se o CAS
+                    // ficou em 0 (sobra de uma decolagem configurada antes),
+                    // spawnar parado no ar não faz sentido — repõe 180 kt
+                    if (repoParams.speedKcas < 1.f)
+                        repoParams.speedKcas = 180.f;
                 }
                 if (ImGui::SmallButton("Centrar no aviao"))
                     minimap.centerPickerOn(fdm.getLatDeg(), fdm.getLonDeg());

@@ -136,8 +136,15 @@ public:
     bool  gsCaptured()       const { return _gsCaptured; }
     float goAroundTargetAlt() const { return _goAroundTargetAlt; }
 
-    // FCU override: atualiza targets sem desengajar
-    void overridePitch(float deg) { targets.pitchDeg = deg; }
+    // FPA alvo do modo básico (ATT HOLD) — ver _fpaTargetDeg.
+    float fpaTarget() const { return _fpaTargetDeg; }
+
+    // FCU override: atualiza targets sem desengajar. No modo básico (ATT
+    // HOLD) o valor é o ÂNGULO DE TRAJETÓRIA (FPA), não pitch bruto — ver
+    // _fpaTargetDeg. Nos outros modos targets.pitchDeg é recomputado todo
+    // frame pela própria cascata (ALT/APP/VNAV/FLCH), então este override só
+    // "gruda" de fato em ATT HOLD.
+    void overridePitch(float deg) { _fpaTargetDeg = deg; }
     void overrideBank (float deg, FlyByWire& fbw) {
         targets.bankDeg = deg;
         fbw.setTargetBank(deg);
@@ -172,4 +179,11 @@ private:
     bool  _gsCaptured        = false;
     float _gsPrevDev         = 999.f;  // desvio do frame anterior — detecta a borda de captura
     float _goAroundTargetAlt = 0.f;    // altBaro alvo do TOGA (engage + 1500 ft)
+
+    // ATT HOLD = mantém o ÂNGULO DE TRAJETÓRIA (FPA = pitch − AoA), não o
+    // pitch bruto — capturado no engage/override; targets.pitchDeg (a barra
+    // do FD) é recomputado todo frame em update() como _fpaTargetDeg + AoA
+    // atual, senão mudança de AoA (velocidade/config/rajada) desviaria da
+    // trajetória mesmo "segurando" o pitch.
+    float _fpaTargetDeg = 0.f;
 };

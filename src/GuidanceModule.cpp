@@ -6,6 +6,11 @@
 
 void GuidanceModule::engageAttitude(const FlyByWire::AircraftState& st, FlyByWire& fbw)
 {
+    constexpr float RAD2DEG = 57.29578f;
+    // Captura o FPA atual (pitch − AoA), não o pitch bruto — ver
+    // _fpaTargetDeg. targets.pitchDeg começa igual ao pitch atual (sem
+    // degrau na barra do FD) e passa a ser recomputado todo frame em update().
+    _fpaTargetDeg    = st.pitchDeg - st.alphaRad * RAD2DEG;
     targets.pitchDeg = st.pitchDeg;
     targets.bankDeg  = st.rollDeg;
     _pitchInteg      = 0.f;
@@ -460,6 +465,14 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         }
     }
 
+    // ── ATT HOLD = FPA hold: barra do FD é o pitch necessário AGORA pra
+    // manter o ângulo de trajetória capturado no engage/override, não um
+    // pitch congelado — recalculado todo frame somando o AoA atual.
+    if (mode.vert == VertMode::AttitudeHold) {
+        constexpr float RAD2DEG = 57.29578f;
+        targets.pitchDeg = _fpaTargetDeg + st.alphaRad * RAD2DEG;
+    }
+
     // ── GO-AROUND / TOGA: atitude fixa de arremetida até a altitude alvo ─────
     if (mode.vert == VertMode::GoAround) {
         constexpr float TOGA_PITCH_DEG = 15.f;  // atitude padrão de arremetida
@@ -525,8 +538,16 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
                 float improvement = _lastSpdErr - spdErr;  // positivo = melhorou
                 if (improvement < 0.5f)
                     _thrBoost += spdErr * STEP_GAIN;
-            } else if (spdErr < -0.5f) {
-                // Overspeed: remove boost mais rápido (era 0.02 — não descia nunca)
+            } else {
+                // Convergido (|spdErr|<=0.5) OU overspeed: descai o boost.
+                // Antes só descia em overspeed ativo — uma vez que o avião
+                // alcançava o alvo (erro dentro da faixa), o boost acumulado
+                // ficava CONGELADO pra sempre, travando o throttle alto sem
+                // resposta a mudança de alvo nem a manete manual (reportado:
+                // em 1x, motor real mais lento pra acelerar deixa o boost
+                // bater no teto 0.35 antes de convergir; em 5x/10x a mesma
+                // janela de 1s real cobre 5-10s de física, converge antes de
+                // acumular — por isso só aparecia em 1x).
                 _thrBoost -= 0.05f;
             }
             _lastSpdErr = spdErr;

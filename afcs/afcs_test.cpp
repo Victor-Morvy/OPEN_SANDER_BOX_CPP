@@ -68,6 +68,7 @@ static void testLNAV() {
     gm.fplan.push_back({-22.5, -42.8, "WPT1"});
     gm.fplan.push_back({-23.0, -42.3, "WPT2"});
     gm.engageLNAV();
+    gm.apCoupled = true;   // sem isso fbw.setTargetBank() nunca é chamado (ver update())
 
     double lat = -22.81, lon = -43.25;
     float hdg = 0.f, bank = 0.f;

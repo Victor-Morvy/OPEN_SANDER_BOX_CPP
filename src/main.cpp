@@ -216,6 +216,7 @@ struct Axes {
     bool apBtn=false;     // Select — Attitude Hold
     bool altBtn=false;    // sem binding no joystick — Circle/B é só câmera (H no teclado ainda funciona)
     bool reverser=false;
+    bool parkBrake=false; // RT+A (toggle) — ver readJoystick()
     // ── Câmera orbital (ângulos persistentes; L2+R2 para ajustar)
     float camYaw   = 0.f;    // 0=atrás, π=nariz; persiste ao soltar gatilhos
     float camPitch = 0.26f;  // ~15° acima; clampado em ±80°
@@ -313,6 +314,12 @@ static bool readJoystick(Axes& a, float dt){
 
         // ── Superfícies ──────────────────────────────────────────────────────
         a.brk     = B(0) ? 1.f : 0.f;                    // A / Cruz = freio
+
+        // ── RT + A = parking brake (toggle) ─────────────────────────────────
+        static bool prevParkCombo = false;
+        bool parkCombo = (r2val > 0.f) && B(0);
+        if (parkCombo && !prevParkCombo) a.parkBrake = !a.parkBrake;
+        prevParkCombo = parkCombo;
 
         static bool prevGear=false;
         if(B(2) && !prevGear) gGearDown = !gGearDown;    // X / □ = trem
@@ -841,6 +848,7 @@ int main(){
                 if (xNow && !xPrev) {
                     FlyByWire::AircraftState acStGa = fdm.getStateForFBW();
                     gm.engageGoAround(acStGa, fbw);
+                    gm.apCoupled = true;
                 }
                 xPrev = xNow;
             }
@@ -911,7 +919,7 @@ int main(){
             inp.pedals      =  axes.rdr;
             inp.throttle[0] = inp.throttle[1] = axes.thr;
             inp.flaps       = axes.flaps;
-            inp.brake       = axes.brk;
+            inp.brake       = axes.parkBrake ? 1.f : axes.brk;   // parking brake trava o freio
             inp.gearCmd     = axes.gear;
             inp.reverser    = axes.reverser;
 
@@ -1305,8 +1313,8 @@ int main(){
                         apPfx, gm.targets.altFt, gm.targets.pitchDeg);
             } else if (vm == GuidanceModule::VertMode::AttitudeHold) {
                 ImGui::TextColored({.2f,1.f,.4f,1.f},
-                    "%s ATT  PCH%+.1f°  ROL%+.1f°",
-                    apPfx, gm.targets.pitchDeg, gm.targets.bankDeg);
+                    "%s FPA %+.1f°  PCH%+.1f°  ROL%+.1f°",
+                    apPfx, gm.fpaTarget(), gm.targets.pitchDeg, gm.targets.bankDeg);
             } else if (vm == GuidanceModule::VertMode::Vnav) {
                 ImGui::TextColored({.6f,.9f,1.f,1.f},
                     "%s VNAV  PCH%+.1f°", apPfx, gm.targets.pitchDeg);
@@ -1384,6 +1392,12 @@ int main(){
                 ImGui::TextColored({1.f,.55f,.1f,1.f}, "REV  DEPLOYED");
             else if (axes.reverser)
                 ImGui::TextColored({.8f,.8f,.3f,1.f}, "REV  ARMED");
+            if (fbw.rtoActive())
+                ImGui::TextColored({1.f,.2f,.2f,1.f}, "!! RTO BRAKING");
+            else if (fbw.autobrake == FlyByWire::Autobrake::Rto)
+                ImGui::TextColored({.8f,.8f,.3f,1.f}, "RTO ARMED");
+            if (axes.parkBrake)
+                ImGui::TextColored({1.f,.6f,.1f,1.f}, "PARK BRAKE SET");
         }
 
         ImGui::Separator();
@@ -1513,11 +1527,27 @@ int main(){
 
         // ── Minimapa HSD (canto inferior esquerdo, heading-up) ────────────────
         if (fdmOk && showMinimap && !paused) {
-            const float mmSz = 250.f;
+            // Expandido (botão "EXPANDIR" no canto do widget): também libera
+            // a edição de rota por clique direito — ver bloco do drawHSD abaixo.
+            const float mmSz = minimap.hsdExpanded
+                ? std::min(std::min((float)fw, (float)fh) * 0.85f, 900.f)
+                : 250.f;
             double aLat = fdm.getLatDeg(), aLon = fdm.getLonDeg();
 
+            // POIs/pistas/navaids são buscados em volta do CENTRO DA VISTA,
+            // não sempre do avião — com o HSD expandido e arrastado (ver
+            // MiniMap::hsdPanned), a área visível no widget pode estar longe
+            // da posição real, e buscar só perto do avião deixava aeroportos/
+            // beacons de fora (reportado: aproximando de SP, nada aparecia
+            // com a vista arrastada até lá).
+            double qLat = aLat, qLon = aLon;
+            if (minimap.hsdExpanded && minimap.hsdPanned())
+                minimap.hsdViewCenter(qLat, qLon);
+            double qx, qz; geo::toWorld(qLat, qLon, ORIGIN_LAT, ORIGIN_LON, qx, qz);
+            glm::vec3 queryWorld((float)qx, 0.f, (float)qz);
+
             // raio visível do widget (metade da diagonal) na latitude/zoom atuais
-            double mpp = 40075016.686 * cos(aLat * 3.14159265358979 / 180.0)
+            double mpp = 40075016.686 * cos(qLat * 3.14159265358979 / 180.0)
                        / (256.0 * (double)(1 << minimap.hsdZoom));
             float viewR = (float)(mpp * mmSz * 0.75);
 
@@ -1526,14 +1556,14 @@ int main(){
             hsdPois.clear(); hsdRwys.clear();
             if (minimap.hsdZoom >= 8) {
                 static std::vector<AirportManager::ApMarker> mk;
-                airports.getNearby(acWorld, viewR, mk);
+                airports.getNearby(queryWorld, viewR, mk);
                 for (const auto& m : mk) {
                     MiniMap::Poi p; p.type = 0; p.label = m.ident;
                     geo::toLatLon(m.wx, m.wz, ORIGIN_LAT, ORIGIN_LON, p.lat, p.lon);
                     hsdPois.push_back(std::move(p));
                 }
                 static std::vector<const Navaids::Nav*> nvs;
-                navdb.getNearby(aLat, aLon, viewR, nvs);
+                navdb.getNearby(qLat, qLon, viewR, nvs);
                 for (const auto* n : nvs) {
                     MiniMap::Poi p;
                     p.type  = n->type == Navaids::Type::VOR ? 1
@@ -1545,7 +1575,7 @@ int main(){
             }
             if (minimap.hsdZoom >= 9) {
                 static std::vector<AirportManager::RwySeg> rs;
-                airports.getRunwaysNear(acWorld, std::min(viewR, 200000.f), rs);
+                airports.getRunwaysNear(queryWorld, std::min(viewR, 200000.f), rs);
                 for (const auto& r : rs)
                     hsdRwys.push_back({r.apIdent, r.leIdent, r.heIdent,
                                        r.leLat, r.leLon, r.heLat, r.heLon,
@@ -1602,7 +1632,12 @@ int main(){
                     double px = wpos.x, pz = wpos.z;
                     int    wptIdx    = gm.activeWpt;
                     float  bankLimit = gm.lowBank ? 15.f : 25.f;
-                    constexpr double GDT = 2.0, GMAXT = 400.0, G_MPS2 = 9.80665;
+                    constexpr double GDT = 2.0, G_MPS2 = 9.80665;
+                    // Duração da curva escala com o raio visível do HSD (viewR),
+                    // não um tempo fixo — senão dar zoom out deixava a linha
+                    // amarela "curta" perto da escala do mapa. 1.3x o raio
+                    // garante que ela sempre alcance a borda do widget.
+                    double GMAXT = std::clamp((double)viewR * 1.3 / gsMs, 400.0, 3600.0);
                     for (double t = 0.0; t <= GMAXT + 1e-6; t += GDT) {
                         MiniMap::PathPt pp;
                         geo::toLatLon(px, pz, ORIGIN_LAT, ORIGIN_LON, pp.lat, pp.lon);
@@ -1645,9 +1680,34 @@ int main(){
                 for (auto& w : gm.fplan) routeLine.push_back({w.lat, w.lon});
             }
 
+            // Edição de rota por clique direito — só habilitada com o mapa
+            // expandido (MiniMap não conhece GuidanceModule; aqui é onde o
+            // resultado do clique/arrasto vira de fato um waypoint em
+            // gm.fplan, ver aplicação logo abaixo do drawHSD).
+            static std::vector<MiniMap::PathPt> editWpts;
+            editWpts.clear();
+            for (auto& w : gm.fplan) editWpts.push_back({w.lat, w.lon});
+            MiniMap::RouteEdit routeEdit;
+
             minimap.drawHSD({mmSz, mmSz}, aLat, aLon,
                             (float)(tel.yaw * RAD2DEG), &hsdPois, &hsdRwys,
-                            &predPath, &guidancePath, &routeLine);
+                            &predPath, &guidancePath, &routeLine,
+                            minimap.hsdExpanded ? &editWpts   : nullptr,
+                            minimap.hsdExpanded ? &routeEdit  : nullptr);
+
+            if (routeEdit.added) {
+                GuidanceModule::Waypoint w;
+                w.lat = routeEdit.addLat;
+                w.lon = routeEdit.addLon;
+                char nameBuf[16];
+                snprintf(nameBuf, sizeof(nameBuf), "WPT%d", (int)gm.fplan.size() + 1);
+                w.name = nameBuf;
+                gm.fplan.push_back(w);
+            }
+            if (routeEdit.dragIdx >= 0 && routeEdit.dragIdx < (int)gm.fplan.size()) {
+                gm.fplan[routeEdit.dragIdx].lat = routeEdit.dragLat;
+                gm.fplan[routeEdit.dragIdx].lon = routeEdit.dragLon;
+            }
             ImGui::End();
             ImGui::PopStyleVar();
         }
@@ -2011,7 +2071,7 @@ int main(){
             bool hdgOn = gm.mode.lat == GuidanceModule::LatMode::HeadingHold;
             if (modeBtn(hdgOn ? "HDG ON##h" : "HDG##h", hdgOn)) {
                 if (hdgOn) gm.disengageLat();
-                else       gm.engageHeading(acStNow);
+                else     { gm.engageHeading(acStNow); gm.apCoupled = true; }
             }
 
             // LNAV: flight plan por ICAO
@@ -2034,7 +2094,7 @@ int main(){
             bool navOn = gm.mode.lat == GuidanceModule::LatMode::Nav;
             if (modeBtn(navOn ? "NAV ON##n" : "NAV##n", navOn)) {
                 if (navOn)                  gm.disengageLat();
-                else if (!gm.fplan.empty()) gm.engageLNAV();
+                else if (!gm.fplan.empty()) { gm.engageLNAV(); gm.apCoupled = true; }
             }
             // Segunda linha: utilitários do plano (não são modos, então ficam
             // fora do alinhamento em BTN_X pra não parecer outro botão de modo)
@@ -2073,7 +2133,7 @@ int main(){
             ImGui::BeginDisabled(!ilsReady);
             if (modeBtn(appOn ? "APP ON##app" : "APP##app", appOn)) {
                 if (appOn) { gm.disengageLat(); gm.disengageVert(); }
-                else       gm.engageApproach(acStNow, fbw);
+                else     { gm.engageApproach(acStNow, fbw); gm.apCoupled = true; }
             }
             ImGui::EndDisabled();
 
@@ -2113,18 +2173,32 @@ int main(){
             bool gaActive = gm.mode.vert == GuidanceModule::VertMode::GoAround;
             if (gaActive) ImGui::PushStyleColor(ImGuiCol_Button, {.85f,.35f,.05f,1.f});
             if (ImGui::Button("TOGA / GO-AROUND (X)##toga", {170.f, 0.f}))
-                gm.engageGoAround(acStNow, fbw);
+                { gm.engageGoAround(acStNow, fbw); gm.apCoupled = true; }
             if (gaActive) ImGui::PopStyleColor();
+
+            // Autobrake: OFF ou RTO (freio máximo automático se abortar a
+            // decolagem com os motores em idle ainda em alta velocidade).
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::Text("AUTOBRAKE");
+            ImGui::SameLine(100.f);
+            bool abOff = fbw.autobrake == FlyByWire::Autobrake::Off;
+            if (modeBtn(abOff ? "OFF ON##abo" : "OFF##abo", abOff))
+                fbw.autobrake = FlyByWire::Autobrake::Off;
+            ImGui::SameLine();
+            bool abRto = fbw.autobrake == FlyByWire::Autobrake::Rto;
+            if (modeBtn(fbw.rtoActive() ? "RTO BRAKING##abr" : (abRto ? "RTO ARMED##abr" : "RTO##abr"),
+                        abRto))
+                fbw.autobrake = FlyByWire::Autobrake::Rto;
 
             ImGui::Dummy({0.f, 6.f});
             ImGui::Separator();
             ImGui::TextDisabled("Modo básico (Roll Hold + FPA)");
-            ImGui::Text("PCH");
+            ImGui::Text("FPA");
             ImGui::SameLine(56.f);
             ImGui::SetNextItemWidth(80.f);
-            float pch = gm.targets.pitchDeg;
-            if (ImGui::InputFloat("°##pch", &pch, 0.5f, 2.f, "%+.1f"))
-                gm.overridePitch(std::clamp(pch, -15.f, 15.f));
+            float fpa = gm.fpaTarget();
+            if (ImGui::InputFloat("°##fpa", &fpa, 0.5f, 2.f, "%+.1f"))
+                gm.overridePitch(std::clamp(fpa, -15.f, 15.f));
             ImGui::SameLine();
             ImGui::Text("ROL");
             ImGui::SameLine();
@@ -2137,7 +2211,7 @@ int main(){
             ImGui::SetCursorPosX((COL_W - 140.f) * 0.5f);
             if (modeBtn(attOn ? "ATT HOLD ON##at" : "ATT HOLD##at", attOn)) {
                 if (attOn) gm.disengageVert();
-                else       gm.engageAttitude(acStNow, fbw);
+                else     { gm.engageAttitude(acStNow, fbw); gm.apCoupled = true; }
             }
 
             ImGui::EndChild();
@@ -2215,7 +2289,7 @@ int main(){
             bool altOn = gm.mode.vert == GuidanceModule::VertMode::AltitudeHold;
             if (modeBtn(altOn ? "ALT ON##a" : "ALT##a", altOn)) {
                 if (altOn) gm.disengageVert();
-                else       gm.engageAltitude(acStNow, fbw);
+                else     { gm.engageAltitude(acStNow, fbw); gm.apCoupled = true; }
             }
 
             ImGui::Text("V/S");
@@ -2234,6 +2308,7 @@ int main(){
                     // garante que alt hold está ativo para o VS fazer efeito
                     if (gm.mode.vert != GuidanceModule::VertMode::AltitudeHold)
                         gm.engageAltitude(acStNow, fbw);
+                    gm.apCoupled = true;
                     // climb power boost: se VS positivo e A/THR ativo,
                     // sobe a base do throttle para 80% para não partir de throttle de cruzeiro
                     if (gm.targets.vsFpm > 0.f && gm.athrEngaged())
@@ -2253,7 +2328,7 @@ int main(){
             bool flchOn = gm.mode.vert == GuidanceModule::VertMode::Flch;
             if (modeBtn(flchOn ? "FLCH ON##f" : "FLCH##f", flchOn)) {
                 if (flchOn) gm.disengageVert();
-                else        gm.engageFlch(acStNow, fbw);
+                else      { gm.engageFlch(acStNow, fbw); gm.apCoupled = true; }
             }
 
             // VNAV: segue o perfil dado pelas altitudes dos waypoints (editar
@@ -2278,7 +2353,7 @@ int main(){
             ImGui::BeginDisabled(!vnavOn && gm.fplan.empty());
             if (modeBtn(vnavOn ? "VNAV ON##vn" : "VNAV##vn", vnavOn)) {
                 if (vnavOn) gm.disengageVert();
-                else        gm.engageVnav(acStNow, fbw);
+                else      { gm.engageVnav(acStNow, fbw); gm.apCoupled = true; }
             }
             ImGui::EndDisabled();
 

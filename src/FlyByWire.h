@@ -133,8 +133,19 @@ public:
     void setYawDamper(bool on) { _ydOn = on; }
     bool yawDamperOn() const   { return _ydOn; }
 
+    // ── Autobrake — OFF ou RTO (rejected takeoff) ──────────────────────────────
+    // RTO arma freio máximo automático: se as manetes forem pra idle ainda no
+    // solo em alta velocidade (decolagem abortada), aplica full brake sozinho
+    // — mesmo gatilho (throttle idle + wow) que já auto-deploya o ground
+    // spoiler, então os dois disparam juntos como no avião real. Não há níveis
+    // de autobrake de pouso (1/2/3/MAX) — fora do escopo pedido.
+    enum class Autobrake { Off, Rto };
+    Autobrake autobrake = Autobrake::Off;
+    bool rtoActive() const { return _rtoActive; }   // leitura p/ HUD (anunciação "RTO")
+
 private:
     bool _ydOn = true;   // real: normalmente ligado por padrão até o piloto desligar
+    bool _rtoActive = false;
     static constexpr float DEG2RAD = 3.14159265f / 180.f;
 
     // Proteções de envelope

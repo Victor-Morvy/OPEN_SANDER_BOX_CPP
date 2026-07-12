@@ -38,11 +38,17 @@ void FlyByWire::update(float dt, const PilotInput& inp,
     // ── Flaps (7 deflexões SLAT/FLAP: 0..0.75 em controls/flight/flaps) ─────
     out.flaps = clamp01(inp.flaps) * 0.75f;
 
-    // ── Freios — somente em terra ─────────────────────────────────────────────
+    // ── Freios — somente em terra; RTO comanda freio máximo sozinho se a
+    // decolagem for abortada (motores em idle ainda rolando rápido no solo) ──
     if (st.wow) {
-        out.brakeL = out.brakeR = clamp01(inp.brake);
+        _rtoActive = autobrake == Autobrake::Rto &&
+                     inp.throttle[0] < 0.05f && inp.throttle[1] < 0.05f &&
+                     st.casKt > 60.f;
+        float autoCmd = _rtoActive ? 1.f : 0.f;
+        out.brakeL = out.brakeR = std::max(clamp01(inp.brake), autoCmd);
     } else {
         out.brakeL = out.brakeR = 0.f;
+        _rtoActive = false;
     }
 
     // ── Trem de pouso ─────────────────────────────────────────────────────────

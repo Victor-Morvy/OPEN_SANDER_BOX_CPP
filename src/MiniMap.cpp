@@ -342,12 +342,19 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                       const std::vector<Rwy>* rwys,
                       const std::vector<PathPt>* pred,
                       const std::vector<PathPt>* guidancePath,
-                      const std::vector<PathPt>* route) {
+                      const std::vector<PathPt>* route,
+                      const std::vector<PathPt>* editWpts,
+                      RouteEdit* editOut) {
+    if (editOut) *editOut = RouteEdit{};
+    else _hsdDragIdx = -1;   // mapa recolhido no meio de um arrasto → cancela
+
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
     ImGui::InvisibleButton("##hsd", size);
-    if (ImGui::IsItemHovered()) {
-        float wheel = ImGui::GetIO().MouseWheel;
+    ImGuiIO& io = ImGui::GetIO();
+    bool hovered = ImGui::IsItemHovered();
+    if (hovered) {
+        float wheel = io.MouseWheel;
         if (wheel > 0.f && hsdZoom < 16) hsdZoom++;
         if (wheel < 0.f && hsdZoom >  5) hsdZoom--;
     }
@@ -356,10 +363,38 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
     ImVec2 center = ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
     float rot = -hdgDeg * (float)MM_D2R;
 
+    // Pan (arrastar com botão esquerdo) — só no HSD expandido (editOut !=
+    // nullptr): dá pra ver aeroportos longe do avião e preparar uma rota de
+    // pouso sem perder a posição real — o avião continua desenhado na
+    // lat/lon verdadeira, só a VISTA descola (ver drawAircraftIcon abaixo).
+    if (editOut) {
+        if (!_hsdPanned) { _hsdViewLat = lat; _hsdViewLon = lon; }  // segue o avião até o 1º arrasto
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.f)) {
+            _hsdPanned = true;
+            double vtx, vty; ll2tile(_hsdViewLat, _hsdViewLon, hsdZoom, vtx, vty);
+            // delta de tela → delta de tile, desrotacionado pelo heading
+            // (mesmo inverso usado no clique direito — ver screenToLatLon)
+            double c = std::cos((double)rot), s = std::sin((double)rot);
+            double dOx =  c * io.MouseDelta.x + s * io.MouseDelta.y;
+            double dOy = -s * io.MouseDelta.x + c * io.MouseDelta.y;
+            vtx -= dOx / 256.0;
+            vty -= dOy / 256.0;
+            tile2ll(vtx, vty, hsdZoom, _hsdViewLat, _hsdViewLon);
+        }
+    } else {
+        _hsdPanned = false;   // mapa recolhido → volta a seguir o avião
+    }
+    double viewLat = _hsdPanned ? _hsdViewLat : lat;
+    double viewLon = _hsdPanned ? _hsdViewLon : lon;
+
     dl->PushClipRect(p0, p1, true);
     dl->AddRectFilled(p0, p1, IM_COL32(12, 16, 20, 235), 6.f);
 
-    double ctx, cty; ll2tile(lat, lon, hsdZoom, ctx, cty);
+    double ctx, cty; ll2tile(viewLat, viewLon, hsdZoom, ctx, cty);
+    // xf em escopo de função (não só do bloco de overlays) — precisa dele lá
+    // embaixo pra achar a posição de tela do avião de verdade, que só
+    // coincide com `center` quando a vista NÃO está deslocada (ver _hsdPanned).
+    Xform xf{center, ctx, cty, hsdZoom, std::cos(rot), std::sin(rot)};
     if (hsdShowTiles)
         drawTiles(dl, center, ctx, cty, hsdZoom, p0, p1, rot);
     // hsdShowTiles=false: sem dado vetorial de land/water no pipeline (só
@@ -369,8 +404,61 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
 
     // overlays de navegação (posições giram com o mapa; textos ficam retos)
     {
-        Xform xf{center, ctx, cty, hsdZoom, std::cos(rot), std::sin(rot)};
-        double mpp = metersPerPixel(lat, hsdZoom);
+        double mpp = metersPerPixel(viewLat, hsdZoom);
+
+        // ── Edição de rota por clique direito (só quando editOut != nullptr,
+        // isto é, HSD expandido — ver drawHSD/hsdExpanded) ─────────────────
+        if (editOut) {
+            bool rClickStart = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+            if (rClickStart) {
+                // acha o waypoint mais próximo do clique (raio de captura 16 px)
+                _hsdDragIdx = -1;
+                if (editWpts) {
+                    float bestD2 = 16.f * 16.f;
+                    for (size_t i = 0; i < editWpts->size(); ++i) {
+                        ImVec2 sp = xf.pt((*editWpts)[i].lat, (*editWpts)[i].lon);
+                        float dx = io.MousePos.x - sp.x, dy = io.MousePos.y - sp.y;
+                        float d2 = dx * dx + dy * dy;
+                        if (d2 < bestD2) { bestD2 = d2; _hsdDragIdx = (int)i; }
+                    }
+                }
+            }
+
+            // Inverso de Xform::pt (tela → tile → lat/lon) — mesma rotação.
+            auto screenToLatLon = [&](ImVec2 sp, double& oLat, double& oLon) {
+                double dx = sp.x - center.x, dy = sp.y - center.y;
+                double c = std::cos((double)rot), s = std::sin((double)rot);
+                double ox =  c * dx + s * dy;
+                double oy = -s * dx + c * dy;
+                tile2ll(ctx + ox / 256.0, cty + oy / 256.0, hsdZoom, oLat, oLon);
+            };
+
+            if (_hsdDragIdx >= 0 && io.MouseDown[ImGuiMouseButton_Right]) {
+                // arrastando um waypoint existente → atualiza a posição dele
+                screenToLatLon(io.MousePos, editOut->dragLat, editOut->dragLon);
+                editOut->dragIdx = _hsdDragIdx;
+            } else if (rClickStart && _hsdDragIdx < 0) {
+                // clique direito longe de qualquer waypoint → adiciona um novo
+                screenToLatLon(io.MousePos, editOut->addLat, editOut->addLon);
+                editOut->added = true;
+            }
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) _hsdDragIdx = -1;
+        }
+
+        // marcadores dos waypoints editáveis (só desenhados quando passados —
+        // isto é, HSD expandido; o rosa da polilinha `route` já cobre o modo
+        // pequeno, aqui é só o "alvo" clicável em destaque)
+        if (editWpts) {
+            for (size_t i = 0; i < editWpts->size(); ++i) {
+                ImVec2 sp = xf.pt((*editWpts)[i].lat, (*editWpts)[i].lon);
+                bool dragging = (int)i == _hsdDragIdx;
+                float r = dragging ? 6.f : 4.5f;
+                ImU32 col = dragging ? IM_COL32(255, 230, 60, 255) : IM_COL32(255, 90, 220, 255);
+                dl->AddCircleFilled(sp, r, col);
+                dl->AddCircle(sp, r, IM_COL32(0, 0, 0, 200), 0, 1.5f);
+            }
+        }
+
         if (rwys) drawRunwaysOverlay(dl, xf, *rwys, mpp, p0, p1,
                                      /*fishbone=*/hsdZoom >= 9,
                                      /*idents=*/hsdZoom >= 12);
@@ -414,7 +502,7 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
 
     // alcance do anel (m/px na latitude atual)
     char buf[48];
-    double rangeM = rr * metersPerPixel(lat, hsdZoom);
+    double rangeM = rr * metersPerPixel(viewLat, hsdZoom);
     if (rangeM >= 1000.0) snprintf(buf, sizeof(buf), "%.0f km", rangeM / 1000.0);
     else                  snprintf(buf, sizeof(buf), "%.0f m", rangeM);
     dl->AddText(ImVec2(p0.x + 6.f, p1.y - 20.f), IM_COL32(255, 255, 255, 200), buf);
@@ -433,7 +521,10 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                     IM_COL32(120, 255, 120, 90), 1.f);
     }
 
-    drawAircraftIcon(dl, center, 0.f, 10.f, IM_COL32(255, 255, 255, 255));
+    // Posição real do avião — só coincide com `center` quando a vista não
+    // está deslocada (_hsdPanned=false); ícone sempre aponta "pra cima"
+    // (0.f) porque é o MAPA que gira com o heading, não o ícone.
+    drawAircraftIcon(dl, xf.pt(lat, lon), 0.f, 10.f, IM_COL32(255, 255, 255, 255));
 
     if (hsdShowTiles)
         dl->AddText(ImVec2(p1.x - 96.f, p1.y - 20.f),
@@ -446,7 +537,6 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
         ImVec2 bp0{p0.x + 4.f, p0.y + 4.f};
         ImVec2 bts = ImGui::CalcTextSize(lbl);
         ImVec2 bp1{bp0.x + bts.x + 10.f, bp0.y + bts.y + 6.f};
-        ImGuiIO& io = ImGui::GetIO();
         bool hov = io.MousePos.x >= bp0.x && io.MousePos.x <= bp1.x &&
                    io.MousePos.y >= bp0.y && io.MousePos.y <= bp1.y;
         if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -455,6 +545,50 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                           hov ? IM_COL32(60, 65, 75, 230) : IM_COL32(25, 28, 34, 210), 3.f);
         dl->AddRect(bp0, bp1, IM_COL32(255, 255, 255, 90), 3.f);
         dl->AddText({bp0.x + 5.f, bp0.y + 3.f}, IM_COL32(230, 230, 230, 255), lbl);
+    }
+
+    // Botão EXPANDIR/REDUZIR (topo-direita): quem chama é quem de fato muda
+    // o `size` passado no próximo frame (ver hsdExpanded) — habilita também
+    // a edição de rota por clique direito (main.cpp só passa editWpts/editOut
+    // quando hsdExpanded). Dica de uso fica logo abaixo, só quando expandido.
+    {
+        const char* lbl = hsdExpanded ? "REDUZIR" : "EXPANDIR";
+        ImVec2 bts = ImGui::CalcTextSize(lbl);
+        ImVec2 bp1{p1.x - 4.f, p0.y + 4.f + bts.y + 6.f};
+        ImVec2 bp0{bp1.x - bts.x - 10.f, p0.y + 4.f};
+        bool hov = io.MousePos.x >= bp0.x && io.MousePos.x <= bp1.x &&
+                   io.MousePos.y >= bp0.y && io.MousePos.y <= bp1.y;
+        if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            hsdExpanded = !hsdExpanded;
+        dl->AddRectFilled(bp0, bp1,
+                          hov ? IM_COL32(60, 65, 75, 230) : IM_COL32(25, 28, 34, 210), 3.f);
+        dl->AddRect(bp0, bp1, IM_COL32(255, 255, 255, 90), 3.f);
+        dl->AddText({bp0.x + 5.f, bp0.y + 3.f}, IM_COL32(230, 230, 230, 255), lbl);
+
+        float nextY = bp1.y;
+        if (editOut) {
+            const char* tip = "esquerdo: arrastar=deslocar    direito: clique=novo wpt, arrastar=mover";
+            ImVec2 ts = ImGui::CalcTextSize(tip);
+            dl->AddText({bp1.x - ts.x, nextY + 4.f}, IM_COL32(255, 255, 255, 150), tip);
+            nextY += ts.y + 8.f;
+        }
+
+        // RECENTRAR: só aparece com a vista deslocada (_hsdPanned) — volta a
+        // seguir o avião sem precisar reduzir e expandir de novo.
+        if (editOut && _hsdPanned) {
+            const char* rlbl = "RECENTRAR";
+            ImVec2 rts = ImGui::CalcTextSize(rlbl);
+            ImVec2 rp1{p1.x - 4.f, nextY + rts.y + 6.f};
+            ImVec2 rp0{rp1.x - rts.x - 10.f, nextY};
+            bool rhov = io.MousePos.x >= rp0.x && io.MousePos.x <= rp1.x &&
+                        io.MousePos.y >= rp0.y && io.MousePos.y <= rp1.y;
+            if (rhov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                _hsdPanned = false;
+            dl->AddRectFilled(rp0, rp1,
+                              rhov ? IM_COL32(80, 60, 30, 230) : IM_COL32(45, 35, 15, 210), 3.f);
+            dl->AddRect(rp0, rp1, IM_COL32(255, 200, 80, 140), 3.f);
+            dl->AddText({rp0.x + 5.f, rp0.y + 3.f}, IM_COL32(255, 210, 120, 255), rlbl);
+        }
     }
 
     dl->PopClipRect();

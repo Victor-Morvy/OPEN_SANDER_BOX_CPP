@@ -333,10 +333,11 @@ void FlyByWire::update(float dt, const PilotInput& inp,
                 mfsL = -bankMaster;   // roll esquerda → spoilers esquerdos sobem
         }
 
-        // Speed brake: inibido se flaps > notch 1  (notch1 = 1/6 ≈ 0.167)
-        float sbk = 0.f;
-        if (!st.wow && inp.flaps < (1.f / 3.f))
-            sbk = clamp01(inp.brake);
+        // Speed brake: disponível em voo, mesmo com flap de pouso — antes era
+        // inibido acima de notch 1 (flap ≥ 1/3), exatamente na configuração
+        // de aproximação/pouso onde mais se precisa dele pra perder velocidade
+        // (reportado: com flap de pouso, o spd brk parava de responder).
+        float sbk = st.wow ? 0.f : clamp01(inp.brake);
 
         out.spoilerL = clamp01(mfsL + sbk);
         out.spoilerR = clamp01(mfsR + sbk);

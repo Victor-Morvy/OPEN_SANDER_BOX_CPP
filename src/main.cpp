@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #ifndef AIRCRAFT_PATH
@@ -833,6 +834,15 @@ int main(){
                     }
                 }
                 hPrev = hNow;
+
+                // X — TOGA / go-around (gatilho, não é toggle: sempre reengaja)
+                static bool xPrev = false;
+                bool xNow = glfwGetKey(win, GLFW_KEY_X) == GLFW_PRESS;
+                if (xNow && !xPrev) {
+                    FlyByWire::AircraftState acStGa = fdm.getStateForFBW();
+                    gm.engageGoAround(acStGa, fbw);
+                }
+                xPrev = xNow;
             }
         }
 
@@ -963,8 +973,12 @@ int main(){
             fdm.setControlsE195(surfCmd);
             fdm.setTerrainElevation((double)terrainElev_m / FT2M);
 
-            // 5. Avança simulação
-            int steps = std::max(1, (int)std::round(simScale*dt*JSB_HZ));
+            // 5. Avança simulação — mesmo cálculo adaptativo da versão web:
+            // steps = round(simScale × dt × jsbHz) garante velocidade real
+            // independente do FPS atual. simScale=0 congela a física (0 steps),
+            // diferente de pausa (P): aqui o resto do loop/renderer continua.
+            int steps = (simScale <= 0.0) ? 0
+                      : std::max(1, (int)std::round(simScale*dt*JSB_HZ));
             for(int i=0;i<steps;i++) fdm.step();
 
             tel = fdm.getTelemetry();
@@ -1228,7 +1242,7 @@ int main(){
         }
 
         ImGui::SetNextWindowPos({8,8},ImGuiCond_Always);
-        ImGui::SetNextWindowSize({260,560},ImGuiCond_Always);
+        ImGui::SetNextWindowSize({260,588},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.75f);
         ImGui::Begin("##hud",nullptr,
             ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
@@ -1236,6 +1250,24 @@ int main(){
 
         ImGui::TextColored({.3f,1.f,.4f,1.f},"WEBFLIGHT C++  E195-E2");
         ImGui::TextDisabled("FBW Normal Law — SBGL Rio");
+        ImGui::Separator();
+
+        // ── Velocidade da simulação (mesmos multiplicadores da versão web:
+        // 0/1/5/10×) — acelera física (steps do JSBSim/frame) e o relógio
+        // juntos, ver cálculo de `steps` mais abaixo no loop.
+        {
+            static const std::pair<double,const char*> simOpts[] = {
+                {0.0,"0x"}, {1.0,"1x"}, {5.0,"5x"}, {10.0,"10x"}
+            };
+            ImGui::TextUnformatted("SIM");
+            for (auto& [v, label] : simOpts) {
+                ImGui::SameLine();
+                bool active = (simScale == v);
+                if (active) ImGui::PushStyleColor(ImGuiCol_Button, {.15f,.75f,.3f,1.f});
+                if (ImGui::Button(label)) simScale = v;
+                if (active) ImGui::PopStyleColor();
+            }
+        }
         ImGui::Separator();
 
         // ── Velocidades
@@ -1284,14 +1316,22 @@ int main(){
                     (gm.targets.altFt > tel.altBaro) ? "CLB" : "DES",
                     gm.targets.altFt, gm.targets.speedKt);
             } else if (vm == GuidanceModule::VertMode::Approach) {
-                if (gm.ils.valid)
+                if (gm.gsCaptured() && gm.ils.valid)
                     ImGui::TextColored({.9f,.5f,1.f,1.f},
-                        "%s APP  GS%+.2f\xC2\xB0  PCH%+.1f\xC2\xB0  %.1fNM",
+                        "%s APP GS  %+.2f\xC2\xB0  PCH%+.1f\xC2\xB0  %.1fNM",
                         apPfx, gm.ils.gsDevDeg, gm.targets.pitchDeg, ilsArmedApp.distNm);
                 else
-                    ImGui::TextColored({.9f,.5f,1.f,1.f},
-                        "%s APP  armado (along%.0fm dist%.1fNM)",
-                        apPfx, ilsArmedApp.alongM, ilsArmedApp.distNm);
+                    ImGui::TextColored({.7f,.4f,.8f,1.f},
+                        "%s APP ARM  hold %5.0fft  dist%.1fNM",
+                        apPfx, gm.targets.altFt, ilsArmedApp.distNm);
+            } else if (vm == GuidanceModule::VertMode::Flare) {
+                ImGui::TextColored({1.f,.4f,.4f,1.f},
+                    "%s FLARE  RA %3.0fft  PCH%+.1f\xC2\xB0",
+                    apPfx, tel.altAgl, gm.targets.pitchDeg);
+            } else if (vm == GuidanceModule::VertMode::GoAround) {
+                ImGui::TextColored({1.f,.6f,.1f,1.f},
+                    "%s TOGA  ->%5.0fft  PCH%+.1f\xC2\xB0",
+                    apPfx, gm.goAroundTargetAlt(), gm.targets.pitchDeg);
             } else {
                 ImGui::TextColored({.5f,.5f,.5f,1.f},
                     "AP OFF   Z=ATT  H=ALT  F1=AFCS");
@@ -2064,6 +2104,17 @@ int main(){
             bool ydOn = fbw.yawDamperOn();
             if (modeBtn(ydOn ? "YD ON##yd" : "YD OFF##yd", ydOn))
                 fbw.setYawDamper(!ydOn);
+
+            // TOGA / go-around — gatilho (não é toggle): interrompe qualquer
+            // approach/pouso e sobe reto com potência/atitude fixas. Também
+            // acionável pela tecla X a qualquer momento.
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetCursorPosX((COL_W - 170.f) * 0.5f);
+            bool gaActive = gm.mode.vert == GuidanceModule::VertMode::GoAround;
+            if (gaActive) ImGui::PushStyleColor(ImGuiCol_Button, {.85f,.35f,.05f,1.f});
+            if (ImGui::Button("TOGA / GO-AROUND (X)##toga", {170.f, 0.f}))
+                gm.engageGoAround(acStNow, fbw);
+            if (gaActive) ImGui::PopStyleColor();
 
             ImGui::Dummy({0.f, 6.f});
             ImGui::Separator();

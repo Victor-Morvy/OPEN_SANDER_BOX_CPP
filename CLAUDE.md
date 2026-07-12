@@ -157,6 +157,29 @@ residual em regime. No solo: pedais diretos, integrador zerado.
   offline nos dois loops.
 - Pitch outer loop compartilhado: KP=0.022, KI=0.003, filtro COL_LP=0.70.
 - Auto-desconexão vert+lat com |column| ou |wheel| > 0.15.
+- **APP (GS) é arm/capture DE VERDADE, não só "sinal válido"**: `_gsCaptured`
+  só liga numa borda de subida — `_gsPrevDev` do frame anterior > janela de
+  captura (0.35°) E o desvio atual <= janela, ou seja, só captura vindo de
+  BAIXO. Enquanto não captura, ARMADO = segura a altitude do `engageApproach`
+  (igual ALT HOLD), nunca "persegue" o desvio bruto. **Bug corrigido**: antes,
+  `ils.valid` (só "sinal no alcance/lado certo", sem checar magnitude do
+  desvio) já disparava a lei de captura desde o primeiro frame — ativar o APP
+  longe da rampa (ex.: muito acima) fazia o avião descer feio, sem nunca
+  alinhar. Agora, ativar acima da rampa fica ARMADO pra sempre (nunca
+  "mergulha" de cima, como AP real) até o piloto descer por outro meio.
+- **Flare** (`VertMode::Flare`): abaixo de 50 ft AGL com GS capturado, troca
+  pra lei clássica `vsDemand = -altAgl/tau·60` (tau=4.5s) — sink decai
+  exponencialmente, nunca chega a zero de verdade (assintótico); o toque
+  acontece fisicamente quando o trem encosta (WOW). Throttle retarda pra
+  idle. AP se desconecta sozinho (`disengageAP`+`disengageVert`+`disengageLat`)
+  2s após WOW em Flare — autoland real não continua "voando" no chão.
+- **TOGA/go-around** (`engageGoAround`, tecla **X** ou botão no painel F1):
+  interrompe qualquer approach/pouso, nivela asas na proa atual (`HeadingHold`
+  capturado no momento do TOGA), sobe com pitch fixo +15° (rate 5°/s) e
+  potência fixa no máximo (firewall, suspende A/THR) até altBaro atingir
+  engage+1500 ft, então cai em Altitude Hold nessa altitude. Simplificação:
+  sem procedimento de missed-approach publicado (este sim não tem FMS de
+  navegação com procedures) — 1500 ft é um heurístico de subida segura.
 
 ---
 
@@ -451,5 +474,7 @@ Executável: `build/Release/webflight.exe`
   - Direct: stick → superfície puro nos 3 eixos, sem aumentação
 - **Reversor**: toggle Y/△ ou tecla R; trava de solo no FBW (`inp.reverser && st.wow`); auto-stow em voo; HUD `REV DEPLOYED`. JSBSim: `reverser-angle-rad = π` → thrust × cos(π) = −1
 - **AFCS completo** (GuidanceModule): ALT/HDG/ATT hold, A/THR, flight director, painel F1
+- **APP com arm/capture real de GS**, **flare automático** (< 50 ft AGL) e
+  **TOGA/go-around** (tecla X ou painel F1) — ver "AFCS — GuidanceModule" acima
 - **FBW roll/yaw**: rate demand + attitude hold roll, yaw damper + beta PI
 - **Terreno 3 LODs** com curvatura da Terra e horizonte físico

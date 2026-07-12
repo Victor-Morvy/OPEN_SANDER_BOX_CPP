@@ -19,7 +19,7 @@
 class GuidanceModule {
 public:
     enum class LatMode  { Off, HeadingHold, Nav, Approach };
-    enum class VertMode { Off, AttitudeHold, AltitudeHold, Flch, Approach, Vnav };
+    enum class VertMode { Off, AttitudeHold, AltitudeHold, Flch, Approach, Vnav, Flare, GoAround };
     enum class ThrMode  { Off, SpeedHold };
 
     struct ModeState {
@@ -113,6 +113,10 @@ public:
     void engageApproach(const FlyByWire::AircraftState& st, FlyByWire& fbw);  // acopla LOC+GS
     void engageVnav    (const FlyByWire::AircraftState& st, FlyByWire& fbw);  // requer fplan c/ altitude
 
+    // TOGA / go-around: interrompe approach/pouso, nivela asas na proa atual
+    // e sobe com potência e atitude fixas até a altitude de missed approach.
+    void engageGoAround(const FlyByWire::AircraftState& st, FlyByWire& fbw);
+
     // Acopla/desacopla o AP aos modos já selecionados (não muda a seleção).
     // engage: se nenhum modo estiver selecionado, cai no básico (ATT HOLD).
     void engageAP (const FlyByWire::AircraftState& st, FlyByWire& fbw);
@@ -126,6 +130,11 @@ public:
     // Permite forçar o throttle base (climb power boost)
     void setBaseThrottle(float thr) { _baseThrottle = thr; }
     float getBaseThrottle() const   { return _baseThrottle; }
+
+    // Leitura para HUD/painel: rampa do GS já capturada (tracking) vs armada
+    // (nivelado esperando interceptar) — ver update() / engageApproach().
+    bool  gsCaptured()       const { return _gsCaptured; }
+    float goAroundTargetAlt() const { return _goAroundTargetAlt; }
 
     // FCU override: atualiza targets sem desengajar
     void overridePitch(float deg) { targets.pitchDeg = deg; }
@@ -157,4 +166,10 @@ private:
     float _thrBoost      = 0.f;   // acúmulo por persistência (degrau a cada segundo)
     float _errTimer      = 0.f;   // cronômetro para o degrau de 1 s
     float _lastSpdErr    = 0.f;   // erro na última checagem
+    float _wowTimer      = 0.f;   // segundos consecutivos com peso nas rodas (auto-desconexão do A/THR)
+
+    // Glideslope: arm→capture (só de baixo pra cima) e alvo de missed approach
+    bool  _gsCaptured        = false;
+    float _gsPrevDev         = 999.f;  // desvio do frame anterior — detecta a borda de captura
+    float _goAroundTargetAlt = 0.f;    // altBaro alvo do TOGA (engage + 1500 ft)
 };

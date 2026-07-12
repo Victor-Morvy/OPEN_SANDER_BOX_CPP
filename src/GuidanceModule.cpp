@@ -55,15 +55,21 @@ void GuidanceModule::engageFlch(const FlyByWire::AircraftState& st, FlyByWire& f
 
 void GuidanceModule::engageApproach(const FlyByWire::AircraftState& st, FlyByWire& fbw)
 {
-    // Acopla LOC (lateral) + GS (vertical) num único botão — simplificação
-    // do par arm/capture real (LOC captura primeiro, GS arma depois). Aqui
-    // os dois eixos ficam "armados" (asas niveladas / pitch parado) até
-    // ils.valid virar true, então passam a seguir locDevDeg/gsDevDeg.
+    // LOC (lateral) intercepta geometricamente qualquer desvio — não precisa
+    // de arm/capture (ver update()). GS (vertical) É arm/capture de verdade:
+    // "armado" = segura a altitude do engage (como ALT HOLD) até a rampa de
+    // 3° cruzar essa altitude vindo de BAIXO; só então "captura" e passa a
+    // seguir gsDevDeg. Sem isso, ativar o APP acima ou muito longe da rampa
+    // fazia o avião "descer errado" perseguindo um desvio enorme desde o
+    // primeiro frame (bug reportado) em vez de esperar alinhar.
     targets.bankDeg  = st.rollDeg;
     targets.pitchDeg = st.pitchDeg;
+    targets.altFt    = st.altBaro;   // ARM: altitude a manter até capturar o GS
     _pitchInteg      = 0.f;
     _vsInteg         = st.pitchDeg;
     _columnFilt      = 0.f;
+    _gsCaptured      = false;
+    _gsPrevDev       = 999.f;
     fbw.setTargetBank(targets.bankDeg);
     mode.lat  = LatMode::Approach;
     mode.vert = VertMode::Approach;
@@ -82,6 +88,28 @@ void GuidanceModule::engageVnav(const FlyByWire::AircraftState& st, FlyByWire& f
     _vsInteg          = st.pitchDeg;
     _columnFilt       = 0.f;
     mode.vert = VertMode::Vnav;
+}
+
+void GuidanceModule::engageGoAround(const FlyByWire::AircraftState& st, FlyByWire& fbw)
+{
+    // TOGA: procedimento padrão — asas niveladas na proa atual (a da pista,
+    // já que o avião estava alinhado no LOC), potência de arremetida fixa
+    // (ver update()) e atitude fixa até subir 1500 ft acima da altitude de
+    // início (aproximação simplificada da altitude de missed approach —
+    // este simulador não tem procedimentos publicados). A/THR sai porque a
+    // potência do TOGA é fixa (firewall), não uma velocidade perseguida.
+    engageHeading(st);
+    disengageThrottle();
+    targets.pitchDeg   = st.pitchDeg;
+    targets.bankDeg    = st.rollDeg;
+    _pitchInteg         = 0.f;
+    _vsInteg            = st.pitchDeg;
+    _columnFilt         = 0.f;
+    _gsCaptured         = false;
+    _gsPrevDev          = 999.f;
+    _goAroundTargetAlt  = st.altBaro + 1500.f;
+    fbw.setTargetBank(0.f);
+    mode.vert = VertMode::GoAround;
 }
 
 void GuidanceModule::engageAP(const FlyByWire::AircraftState& st, FlyByWire& fbw)
@@ -110,6 +138,8 @@ void GuidanceModule::disengageVert()
     _vsInteg      = 0.f;
     _flchInteg    = 0.f;
     _flchThrTrim  = 0.f;
+    _gsCaptured   = false;
+    _gsPrevDev    = 999.f;
 }
 
 void GuidanceModule::disengageLat()
@@ -159,6 +189,25 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
     // ("AP DISENGAGE NÃO afeta o FD, só descola dos servos").
     if (std::abs(inp.column) > DISC_THRESH || std::abs(inp.wheel) > DISC_THRESH) {
         apCoupled = false;
+    }
+
+    // ── A/THR: auto-desconexão após 3 s consecutivos de peso nas rodas ───────
+    // Pouso completo → não faz sentido o A/THR continuar segurando velocidade
+    // no solo (o piloto já está gerenciando reverso/freio manualmente).
+    if (st.wow) {
+        _wowTimer += dt;
+        if (_wowTimer > 3.f && mode.thr == ThrMode::SpeedHold)
+            disengageThrottle();
+        // ── AP: auto-desconexão completa após o pouso ─────────────────────────
+        // Autoland real desliga o AP sozinho logo após o toque — não faz
+        // sentido continuar "voando" a lei do flare com o avião no solo.
+        if (mode.vert == VertMode::Flare && _wowTimer > 2.f) {
+            disengageAP();
+            disengageVert();
+            disengageLat();
+        }
+    } else {
+        _wowTimer = 0.f;
     }
 
     // ── LNAV: bearing ao waypoint ativo → heading target ─────────────────────
@@ -226,27 +275,65 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         }
     }
 
-    // ── Altitude Hold / APP GS / VNAV: cascata alt|GS|path → VS → pitch ──────
+    // ── Altitude Hold / APP GS / VNAV / Flare: cascata alt|GS|path → VS → pitch
     if (mode.vert == VertMode::AltitudeHold || mode.vert == VertMode::Approach ||
-        mode.vert == VertMode::Vnav) {
+        mode.vert == VertMode::Vnav || mode.vert == VertMode::Flare) {
         constexpr float KP_ALT      = 1.6f;
         constexpr float KP_VS       = 0.009f;
         constexpr float KI_VS       = 0.0006f; // integrador: elimina erro de regime do VS
         constexpr float PITCH_RATE  = 4.0f;   // °/s
         constexpr float KP_GS       = 120.f;   // fpm por grau de desvio — só a CORREÇÃO
         constexpr float TAN_3DEG    = 0.05241f;
+        constexpr float GS_CAPTURE_DEG = 0.35f; // janela de captura do glideslope
+        constexpr float FLARE_AGL_FT   = 50.f;  // altura AGL onde a rampa vira flare
+        constexpr float FLARE_TAU      = 4.5f;  // s — h_dot = -h/tau (lei clássica de flare)
 
         float vsDemand;
         if (mode.vert == VertMode::Approach) {
-            // Armado (sinal fora do cone): mantém nível até capturar.
-            // Capturado: baseline = taxa de descida que a rampa de 3° exige
-            // NA VELOCIDADE ATUAL (kt → ft/min: ×101.3), mais a correção
-            // proporcional ao desvio. Sem o baseline, desvio pequeno (already
-            // tracking) demandava VS≈0 — nivelava em vez de descer a rampa.
-            float baselineVsFpm = -st.casKt * 101.3f * TAN_3DEG;
-            vsDemand = ils.valid ? std::clamp(baselineVsFpm + KP_GS * ils.gsDevDeg,
-                                              -1200.f, 600.f)
-                                  : 0.f;
+            // GS é arm/capture DE VERDADE — não basta o sinal estar "válido"
+            // (dentro do cone/alcance): precisa cruzar a janela de captura
+            // vindo de BAIXO (_gsPrevDev > janela → dev atual <= janela). Isso
+            // é o que corrige o bug de ativar o APP numa altitude errada: se
+            // o avião está acima da rampa, o desvio começa negativo e nunca
+            // cruza a janela por baixo — fica ARMADO segurando a altitude do
+            // engage (como ALT HOLD) para sempre, em vez de "descer errado"
+            // perseguindo um desvio enorme desde o primeiro frame.
+            if (ils.valid) {
+                if (!_gsCaptured && _gsPrevDev > GS_CAPTURE_DEG &&
+                    ils.gsDevDeg <= GS_CAPTURE_DEG) {
+                    _gsCaptured = true;
+                    _vsInteg    = st.pitchDeg;   // transferência bump-free arm→capture
+                }
+                _gsPrevDev = ils.gsDevDeg;
+            }
+
+            if (_gsCaptured && ils.valid) {
+                // Capturado: baseline = taxa de descida que a rampa de 3° exige
+                // NA VELOCIDADE ATUAL (kt → ft/min: ×101.3), mais a correção
+                // proporcional ao desvio. Sem o baseline, desvio pequeno (already
+                // tracking) demandava VS≈0 — nivelava em vez de descer a rampa.
+                float baselineVsFpm = -st.casKt * 101.3f * TAN_3DEG;
+                vsDemand = std::clamp(baselineVsFpm + KP_GS * ils.gsDevDeg,
+                                      -1200.f, 600.f);
+                if (st.altAgl < FLARE_AGL_FT) {
+                    // Perto do chão: a rampa de 3° levaria a um pouso duro —
+                    // transfere pro flare (lei própria, ver branch abaixo).
+                    mode.vert = VertMode::Flare;
+                    _vsInteg  = st.pitchDeg;
+                }
+            } else {
+                // ARM: ainda não capturou (ou sinal fora do cone) — segura a
+                // altitude capturada no engageApproach, exatamente como ALT
+                // HOLD, até a rampa "subir" até o avião.
+                float altErr = targets.altFt - st.altBaro;
+                vsDemand = std::clamp(KP_ALT * altErr, -MAX_VS_FPM, MAX_VS_FPM);
+            }
+        } else if (mode.vert == VertMode::Flare) {
+            // Lei clássica de flare: sink demandado decai exponencialmente
+            // com a altura — nunca chega a zero de verdade (assintótico), o
+            // toque acontece fisicamente quando o trem encosta (WOW), não
+            // quando este VS demand zera.
+            vsDemand = -std::max(st.altAgl, 0.f) / FLARE_TAU * 60.f;
         } else if (mode.vert == VertMode::Vnav) {
             // Recalcula o próximo waypoint com restrição de altitude — o LNAV
             // pode sequenciar o fplan em paralelo (VNAV não mexe em activeWpt).
@@ -373,6 +460,23 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         }
     }
 
+    // ── GO-AROUND / TOGA: atitude fixa de arremetida até a altitude alvo ─────
+    if (mode.vert == VertMode::GoAround) {
+        constexpr float TOGA_PITCH_DEG = 15.f;  // atitude padrão de arremetida
+        constexpr float PITCH_RATE     = 5.f;   // °/s — resposta rápida (procedimento de emergência)
+
+        float delta = std::clamp(TOGA_PITCH_DEG - targets.pitchDeg,
+                                 -PITCH_RATE * dt, PITCH_RATE * dt);
+        targets.pitchDeg += delta;
+
+        if (st.altBaro >= _goAroundTargetAlt) {
+            // Capturou a altitude de missed approach → assume Altitude Hold
+            mode.vert     = VertMode::AltitudeHold;
+            targets.altFt = _goAroundTargetAlt;
+            _vsInteg      = st.pitchDeg;
+        }
+    }
+
     // ── Loop externo de pitch — servo do AP (compartilhado att/alt/vnav/app) ──
     // targets.pitchDeg já foi computado acima (alimenta fd.pitchBar mesmo sem
     // AP acoplado); só escreve em inp.column se o AP estiver de fato acoplado.
@@ -389,8 +493,10 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
         inp.wheel      = 0.f;
     }
 
-    // ── Speed Hold (autothrottle) — suspenso durante FLCH (throttle é fixo) ──
-    if (mode.thr == ThrMode::SpeedHold && mode.vert != VertMode::Flch) {
+    // ── Speed Hold (autothrottle) — suspenso durante FLCH/GO-AROUND/FLARE
+    // (throttle fixo nesses modos, ver overrides logo abaixo) ────────────────
+    if (mode.thr == ThrMode::SpeedHold && mode.vert != VertMode::Flch &&
+        mode.vert != VertMode::GoAround && mode.vert != VertMode::Flare) {
         constexpr float KP_SPD    = 0.025f;  // P underspeed [throttle/kt]
         constexpr float KP_OVR    = 0.015f;  // P overspeed — mais suave (piso é prioridade)
         constexpr float KI_SPD    = 0.010f;  // I underspeed [throttle/(kt·s)]
@@ -440,6 +546,21 @@ bool GuidanceModule::update(float dt, const FlyByWire::AircraftState& st,
     if (mode.vert == VertMode::Flch) {
         out.throttle[0]      = _flchThr;
         out.throttle[1]      = _flchThr;
+        out.overrideThrottle = true;
+    }
+
+    // ── GO-AROUND: potência de arremetida fixa no máximo (firewall) ──────────
+    if (mode.vert == VertMode::GoAround) {
+        out.throttle[0]      = 1.f;
+        out.throttle[1]      = 1.f;
+        out.overrideThrottle = true;
+    }
+
+    // ── FLARE: retarda pra idle — autothrottle real reduz a potência perto
+    // do toque, senão o avião não desacelera/afunda pro pouso ────────────────
+    if (mode.vert == VertMode::Flare) {
+        out.throttle[0]      = 0.f;
+        out.throttle[1]      = 0.f;
         out.overrideThrottle = true;
     }
 

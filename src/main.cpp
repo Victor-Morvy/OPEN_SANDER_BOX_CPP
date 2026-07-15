@@ -1646,6 +1646,17 @@ int main(){
                     int    wptIdx    = gm.activeWpt;
                     float  bankLimit = gm.lowBank ? 15.f : 25.f;
                     constexpr double GDT = 2.0, G_MPS2 = 9.80665;
+                    // Constante de tempo do banco real (malha de attitude hold
+                    // do FlyByWire, ver "ROLAGEM" em FlyByWire.cpp: demRate =
+                    // holdKp(0.03)*bankErr*maxRollRateDegS(22) ≈ bankErr/1.5s
+                    // — mesmo valor já usado/validado em afcs_test.cpp). Sem
+                    // isso a curva assumia banco INSTANTÂNEO no alvo demandado
+                    // — perto de um waypoint, a proa-alvo varre rápido (curva
+                    // de perseguição) e o avião de verdade não consegue bancar
+                    // tão rápido quanto a prévia assumia: reportado como "o
+                    // avião curva, mas o rumo não bate com a linha amarela".
+                    constexpr double BANK_TAU = 1.5, SUBDT = 0.25;
+                    double simBankDeg = tel.roll * RAD2DEG;   // continuidade com o banco atual de verdade
                     // Duração da curva escala com o raio visível do HSD (viewR),
                     // não um tempo fixo — senão dar zoom out deixava a linha
                     // amarela "curta" perto da escala do mapa. 1.3x o raio
@@ -1673,13 +1684,21 @@ int main(){
                         double hdgErr = targetHdgDeg - trkDeg;
                         while (hdgErr >  180.0) hdgErr -= 360.0;
                         while (hdgErr < -180.0) hdgErr += 360.0;
-                        double bankDeg = std::clamp(3.0 * hdgErr,
-                                                    -(double)bankLimit, (double)bankLimit);
-                        double turnRateRadS = (G_MPS2 * tan(bankDeg / RAD2DEG))
-                                             / std::max(gsMs, 1.0);
-                        trkRad += turnRateRadS * GDT;
-                        px += gsMs * GDT * sin(trkRad);
-                        pz -= gsMs * GDT * cos(trkRad);
+                        double bankDemand = std::clamp(3.0 * hdgErr,
+                                                       -(double)bankLimit, (double)bankLimit);
+                        // Sub-passos finos (SUBDT) só pra física do banco/curva —
+                        // o alvo de proa (bankDemand) fica fixo durante o GDT
+                        // inteiro, igual antes, só a resposta do banco a ele
+                        // ganhou a defasagem de primeira ordem (BANK_TAU).
+                        for (double s = 0.0; s < GDT - 1e-9; s += SUBDT) {
+                            double ds = std::min(SUBDT, GDT - s);
+                            simBankDeg += (bankDemand - simBankDeg) * (ds / BANK_TAU);
+                            double turnRateRadS = (G_MPS2 * tan(simBankDeg / RAD2DEG))
+                                                 / std::max(gsMs, 1.0);
+                            trkRad += turnRateRadS * ds;
+                            px += gsMs * ds * sin(trkRad);
+                            pz -= gsMs * ds * cos(trkRad);
+                        }
                     }
                 }
             }

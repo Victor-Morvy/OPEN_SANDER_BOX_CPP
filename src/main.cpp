@@ -1699,7 +1699,7 @@ int main(){
             // gm.fplan, ver aplicação logo abaixo do drawHSD).
             static std::vector<MiniMap::PathPt> editWpts;
             editWpts.clear();
-            for (auto& w : gm.fplan) editWpts.push_back({w.lat, w.lon});
+            for (auto& w : gm.fplan) editWpts.push_back({w.lat, w.lon, w.name});
             MiniMap::RouteEdit routeEdit;
 
             minimap.drawHSD({mmSz, mmSz}, aLat, aLon,

@@ -456,6 +456,12 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                 ImU32 col = dragging ? IM_COL32(255, 230, 60, 255) : IM_COL32(255, 90, 220, 255);
                 dl->AddCircleFilled(sp, r, col);
                 dl->AddCircle(sp, r, IM_COL32(0, 0, 0, 200), 0, 1.5f);
+                const std::string& nm = (*editWpts)[i].name;
+                if (!nm.empty()) {
+                    ImVec2 tp(sp.x + r + 3.f, sp.y - 7.f);
+                    dl->AddText(ImVec2(tp.x + 1, tp.y + 1), IM_COL32(0, 0, 0, 220), nm.c_str());
+                    dl->AddText(tp, IM_COL32(255, 230, 60, 255), nm.c_str());
+                }
             }
         }
 

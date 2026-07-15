@@ -32,8 +32,10 @@ public:
         float  leElevM, heElevM;   // MSL [m]
     };
 
-    // Ponto de trajetória prevista (trend vector do HSD)
-    struct PathPt { double lat, lon; };
+    // Ponto de trajetória prevista (trend vector do HSD). `name` só é usado
+    // por editWpts (rótulo do waypoint no HSD expandido) — vazio nos demais
+    // usos (pred/guidancePath/route), que não precisam de texto.
+    struct PathPt { double lat, lon; std::string name; };
 
     // Preenchido quando o clique do picker "gruda" numa cabeceira:
     // posição = cabeceira, proa = decolagem (cabeceira → outra ponta)

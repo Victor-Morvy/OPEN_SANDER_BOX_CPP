@@ -361,7 +361,7 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 center = ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
-    float rot = -hdgDeg * (float)MM_D2R;
+    float rot = hsdNorthUp ? 0.f : -hdgDeg * (float)MM_D2R;
 
     // Pan (arrastar com botão esquerdo) — só no HSD expandido (editOut !=
     // nullptr): dá pra ver aeroportos longe do avião e preparar uma rota de
@@ -513,24 +513,29 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
     else                  snprintf(buf, sizeof(buf), "%.0f m", rangeM);
     dl->AddText(ImVec2(p0.x + 6.f, p1.y - 20.f), IM_COL32(255, 255, 255, 200), buf);
 
-    // proa no topo
-    snprintf(buf, sizeof(buf), "%03d\xC2\xB0", ((int)std::lround(hdgDeg) % 360 + 360) % 360);
+    // Marcador de proa (lubber): desliza no anel na posição onde a proa
+    // atual cai na carta — ângulo de tela = hdgDeg + rot, igual ao usado pro
+    // "N" acima (bearing 0). Em HDG-UP, rot=-hdgDeg cancela e fica sempre no
+    // topo (comportamento de sempre); em N-UP, rot=0 e ele gira em volta do
+    // anel conforme a proa muda — igual um HSI real em modo N UP.
     {
+        float hdgAng = hdgDeg * (float)MM_D2R + rot;
+        ImVec2 hp = ImVec2(center.x + rr * std::sin(hdgAng), center.y - rr * std::cos(hdgAng));
+        snprintf(buf, sizeof(buf), "%03d\xC2\xB0", ((int)std::lround(hdgDeg) % 360 + 360) % 360);
         ImVec2 ts = ImGui::CalcTextSize(buf);
-        ImVec2 tp = ImVec2(center.x - ts.x * 0.5f, p0.y + 4.f);
+        ImVec2 tp = ImVec2(hp.x - ts.x * 0.5f, hp.y - ts.y * 0.5f);
         dl->AddRectFilled(ImVec2(tp.x - 5.f, tp.y - 2.f),
                           ImVec2(tp.x + ts.x + 5.f, tp.y + ts.y + 2.f),
                           IM_COL32(10, 14, 18, 210), 3.f);
         dl->AddText(tp, IM_COL32(120, 255, 120, 255), buf);
-        // linha de rumo do topo do anel até o avião
-        dl->AddLine(ImVec2(center.x, center.y - rr), ImVec2(center.x, tp.y + ts.y + 3.f),
-                    IM_COL32(120, 255, 120, 90), 1.f);
     }
 
     // Posição real do avião — só coincide com `center` quando a vista não
-    // está deslocada (_hsdPanned=false); ícone sempre aponta "pra cima"
-    // (0.f) porque é o MAPA que gira com o heading, não o ícone.
-    drawAircraftIcon(dl, xf.pt(lat, lon), 0.f, 10.f, IM_COL32(255, 255, 255, 255));
+    // está deslocada (_hsdPanned=false). Ângulo de tela = hdgDeg + rot: em
+    // HDG-UP cancela e o ícone fica sempre apontando pra cima (é o MAPA que
+    // gira); em N-UP o mapa fica fixo e é o ÍCONE que gira mostrando a proa
+    // real, como no HSI.
+    drawAircraftIcon(dl, xf.pt(lat, lon), hdgDeg * (float)MM_D2R + rot, 10.f, IM_COL32(255, 255, 255, 255));
 
     if (hsdShowTiles)
         dl->AddText(ImVec2(p1.x - 96.f, p1.y - 20.f),
@@ -551,6 +556,21 @@ void MiniMap::drawHSD(ImVec2 size, double lat, double lon, float hdgDeg,
                           hov ? IM_COL32(60, 65, 75, 230) : IM_COL32(25, 28, 34, 210), 3.f);
         dl->AddRect(bp0, bp1, IM_COL32(255, 255, 255, 90), 3.f);
         dl->AddText({bp0.x + 5.f, bp0.y + 3.f}, IM_COL32(230, 230, 230, 255), lbl);
+
+        // Botão N UP/HDG UP, empilhado logo abaixo — trava a orientação do
+        // HSD (ver hsdNorthUp).
+        const char* olbl = hsdNorthUp ? "N UP" : "HDG UP";
+        ImVec2 obp0{bp0.x, bp1.y + 4.f};
+        ImVec2 ots = ImGui::CalcTextSize(olbl);
+        ImVec2 obp1{obp0.x + ots.x + 10.f, obp0.y + ots.y + 6.f};
+        bool ohov = io.MousePos.x >= obp0.x && io.MousePos.x <= obp1.x &&
+                    io.MousePos.y >= obp0.y && io.MousePos.y <= obp1.y;
+        if (ohov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            hsdNorthUp = !hsdNorthUp;
+        dl->AddRectFilled(obp0, obp1,
+                          ohov ? IM_COL32(60, 65, 75, 230) : IM_COL32(25, 28, 34, 210), 3.f);
+        dl->AddRect(obp0, obp1, IM_COL32(255, 255, 255, 90), 3.f);
+        dl->AddText({obp0.x + 5.f, obp0.y + 3.f}, IM_COL32(230, 230, 230, 255), olbl);
     }
 
     // Botão EXPANDIR/REDUZIR (topo-direita): quem chama é quem de fato muda

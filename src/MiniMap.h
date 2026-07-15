@@ -129,6 +129,12 @@ public:
     // tamanho de verdade passado em `size`, isto aqui é só a intenção.
     bool hsdExpanded = false;
 
+    // Trava de orientação do HSD: false = heading-up (mapa gira, avião fixo
+    // apontando pra cima — padrão de sempre); true = north-up (mapa fixo com
+    // Norte no topo, avião gira mostrando a proa real, como um HSI clássico
+    // em modo "N UP"). Botão no canto do HSD alterna (ver drawHSD).
+    bool hsdNorthUp = false;
+
 private:
     struct Key {
         int z, x, y;

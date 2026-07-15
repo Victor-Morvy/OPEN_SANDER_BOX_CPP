@@ -689,8 +689,9 @@ bool MiniMap::drawPicker(ImVec2 size, double& selLat, double& selLon,
                 rwyPick->hdgDeg = candLE
                     ? bearingDeg(r.leLat, r.leLon, r.heLat, r.heLon)
                     : bearingDeg(r.heLat, r.heLon, r.leLat, r.leLon);
-                rwyPick->elevM  = candLE ? r.leElevM : r.heElevM;
-                rwyPick->label  = r.apIdent + " " + (candLE ? r.leIdent : r.heIdent);
+                rwyPick->elevM   = candLE ? r.leElevM : r.heElevM;
+                rwyPick->lengthM = (float)geoDistM(r.leLat, r.leLon, r.heLat, r.heLon);
+                rwyPick->label   = r.apIdent + " " + (candLE ? r.leIdent : r.heIdent);
                 selLat = rwyPick->lat;
                 selLon = rwyPick->lon;
             } else {

@@ -458,6 +458,13 @@ struct AppCand {
     double thrX = 0, thrZ = 0;         // cabeceira em world (m)
     float  thrElevM  = 0.f;            // elevação MSL da cabeceira
     float  courseDeg = 0.f;            // proa de POUSO (true)
+    // Ponto onde a rampa de 3° cruza o solo (h=0) — distância ALÉM da
+    // cabeceira ao longo do eixo da pista. 0 = pousa em cima da cabeceira
+    // (comportamento antigo); metade do comprimento da pista = pousa no
+    // meio dela (pedido do Victor: tocava cedo demais, quase antes da
+    // pista, por causa da antena LOC simulada 3 km fora — QUALQUER desvio
+    // residual do LOC virava um pouso curto).
+    float  aimOffsetM = 0.f;
     // Calculado por frame:
     float distNm = 0, locDevDeg = 0, gsDevDeg = 0;
     float courseDiff = 0, alongM = 0, todDistM = 0;
@@ -480,12 +487,18 @@ static void computeApproachDevs(AppCand& a, double acX, double acZ,
     float cross = (float)(dx * (-lz) + dz * lx);       // + = à direita da centerline
     a.alongM    = along;
     a.locDevDeg = atan2f(-cross, along + 3000.f) * (float)RAD2DEG;
-    float h       = acMslM - a.thrElevM;
-    float gsAngle = atan2f(h, std::max(along, 1.f)) * (float)RAD2DEG;
+    float h         = acMslM - a.thrElevM;
+    // Ponto de toque fica ALÉM da cabeceira (aimOffsetM na direção do
+    // pouso) — a distância até ELE é maior que a distância até a
+    // cabeceira, por isso soma (não subtrai). Tinha invertido o sinal:
+    // isso puxava o ponto de mira pra ANTES da cabeceira, deixando a
+    // rampa mais íngreme e descendo ainda mais cedo (reportado).
+    float alongToAim = along + a.aimOffsetM;   // 0 no ponto de toque, não na cabeceira
+    float gsAngle   = atan2f(h, std::max(alongToAim, 1.f)) * (float)RAD2DEG;
     a.gsDevDeg  = 3.f - gsAngle;
     a.distNm    = sqrtf(along * along + cross * cross) / 1852.f;
     a.courseDiff = fabsf(fmodf(a.courseDeg - hdgDeg + 540.f, 360.f) - 180.f);
-    a.todDistM  = std::max(h, 0.f) / tanf(3.f * D2Rf);
+    a.todDistM  = std::max(h, 0.f) / tanf(3.f * D2Rf) - a.aimOffsetM;
     a.valid = along > 300.f && a.distNm < 25.f &&
               fabsf(a.locDevDeg) < 8.f && a.courseDiff < 40.f;
 }
@@ -1954,6 +1967,10 @@ int main(){
                                      ilsArmedApp.thrX, ilsArmedApp.thrZ);
                         ilsArmedApp.thrElevM  = lastRwyPick.elevM;
                         ilsArmedApp.courseDeg = (float)lastRwyPick.hdgDeg;
+                        // Mira o pouso na METADE da pista, não em cima da
+                        // cabeceira — encostava cedo demais (quase antes da
+                        // pista) por qualquer resíduo do LOC/GS sintéticos.
+                        ilsArmedApp.aimOffsetM = lastRwyPick.lengthM * 0.5f;
                     }
                     if (ilsArmed) {
                         ImGui::SameLine();

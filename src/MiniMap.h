@@ -42,6 +42,7 @@ public:
         double lat = 0, lon = 0;
         double hdgDeg = 0;
         float  elevM = 0;
+        float  lengthM = 0;  // cabeceira→cabeceira — usado p/ mirar o pouso no ILS sintético
         std::string label;   // ex.: "SBGL 10"
     };
 
